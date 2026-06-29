@@ -10,7 +10,7 @@ node_modules/
 .env.production
 .env.staging
 # Allow .env.example (template for devs)
-!.env.example
+!.env.examplestatus
 secrets/
 credentials/
 
