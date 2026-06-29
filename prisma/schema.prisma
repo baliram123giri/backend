@@ -1,0 +1,211 @@
+// Prisma schema file for Fastify Backend
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Feedback {
+  id        String   @id @default(uuid())
+  name      String
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+model DownloadLog {
+  id         String   @id @default(uuid())
+  name       String
+  location   String?
+  format     String
+  templateId String?
+  ipAddress  String?
+  userAgent  String?
+  orderId    String?
+  errorMsg   String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  order      Order?   @relation(fields: [orderId], references: [razorpayOrderId])
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("user") // "admin", "moderator", "user"
+  status    String   @default("active") // "active", "suspended"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Template {
+  id                     String   @id @default(uuid())
+  name                   String
+  description            String?  @default("")
+  defaultPrimary         String
+  defaultSecondary       String
+  defaultAccent          String
+  defaultPadding         Int      @default(60)
+  defaultYPadding        Int?
+  defaultPaddingTop      Int?
+  defaultPaddingRight    Int?
+  defaultPaddingLeft     Int?
+  defaultFontSize        Int?
+  photoX                 Int      @default(390)
+  photoY                 Int      @default(100)
+  photoWidth             Int      @default(100)
+  photoHeight            Int      @default(130)
+  photoCornerRadius      Int      @default(8)
+  photoShowBorder        Boolean? @default(true)
+  frameType              String   @default("image") // "image", "svg", "gradient", "custom"
+  frameUrlTemplate       String?
+  frameBgType            String?  @default("solid")
+  frameBgColor           String?
+  frameBgGradientColors  String[]
+  frameOuterInset        Int?
+  frameOuterStrokeWidth  Int?
+  frameOuterCornerRadius Int?
+  frameInnerInset        Int?
+  frameInnerStrokeWidth  Int?
+  frameInnerCornerRadius Int?
+  frameHasCornerCurves   Boolean?
+  frameGradientColors    String[]
+  frameComponentId       String?
+  thumbnailUrl           String?
+  previewPhotoUrl        String?
+  rawInput               Json?
+  bgConfig               Json?
+  detailsLayout          String   @default("classic")
+  titleShape             String   @default("simple")
+  mantraSignPlacement    String   @default("both")
+  mantraSignVertical     String   @default("top")
+  language               String   @default("English")
+  religion               String?  @default("General")
+  gender                 String   @default("both")
+  active                 Boolean  @default(true)
+  // Pricing
+  isPremium              Boolean  @default(false)
+  isDefault              Boolean  @default(false)
+  price                  Float?
+  discountPrice          Float?
+  currency               String   @default("INR")
+  // Format-specific Pricing
+  pdfPrice               Float?
+  pdfDiscountPrice       Float?
+  docxPrice              Float?
+  docxDiscountPrice      Float?
+  jpgPrice               Float?
+  jpgDiscountPrice       Float?
+  pngPrice               Float?
+  pngDiscountPrice       Float?
+  comboPrice             Float?
+  comboDiscountPrice     Float?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model Background {
+  id        String   @id @default(uuid())
+  name      String
+  url       String
+  createdAt DateTime @default(now())
+}
+
+model HeroSlide {
+  id        String   @id @default(uuid())
+  title     String?  @default("")
+  imageUrl  String
+  order     Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BlogPost {
+  id           String   @id @default(uuid())
+  slug         String   @unique
+  title        String
+  description  String
+  thumbnailUrl String?
+  publishDate  String
+  readTime     String
+  category     String
+  language     String   @default("English")
+  author       String
+  content      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Order {
+  id                String   @id @default(uuid())
+  razorpayOrderId   String   @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+  amount            Float
+  currency          String   @default("INR")
+  status            String   // "pending", "paid", "failed"
+  format            String   // "pdf", "docx", "jpg", "png", "combo"
+  templateId        String
+  customerName      String?
+  customerEmail     String?
+  customerPhone     String?
+  couponCode        String?
+  discountApplied   Float?   @default(0)
+  downloadStatus    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  downloadLogs      DownloadLog[]
+}
+
+model Coupon {
+  id            String    @id @default(uuid())
+  code          String    @unique
+  discountType  String    // "percentage" or "fixed"
+  discountValue Float
+  active        Boolean   @default(true)
+  isPublic      Boolean   @default(true)
+  maxUses       Int?
+  usedCount     Int       @default(0)
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Sticker {
+  id        String   @id @default(uuid())
+  name      String
+  url       String
+  type      String   @default("Normal") // "Normal" or "Mantra"
+  religion  String?  // Optional: "Hindu", "Muslim", "Sikh", "Jain", "Christian", "All" etc.
+  createdAt DateTime @default(now())
+}
+
+model Mantra {
+  id          String   @id @default(uuid())
+  religion    String
+  text        String
+  nativeText  String?
+  meaning     String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ReviewSettings {
+  id               String   @id @default("global")
+  googleEnabled    Boolean  @default(true)
+  googleRating     Float    @default(4.9)
+  googleCount      Int      @default(524)
+  googleUrl        String   @default("https://share.google/T4eEjxMJkqDKaFWGN")
+  trustpilotEnabled Boolean  @default(true)
+  trustpilotRating Float    @default(4.8)
+  trustpilotCount  Int      @default(320)
+  trustpilotUrl    String   @default("https://www.trustpilot.com/review/biodata99.com")
+  updatedAt        DateTime @updatedAt
+}
