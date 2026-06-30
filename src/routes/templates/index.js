@@ -80,7 +80,7 @@ export default async function publicTemplateRoutes(app, options) {
           return { templates };
         }
 
-        const pageLimit = limit > 0 ? limit : 10;
+        const pageLimit = limit > 0 ? limit : 100;
         const skip = (page - 1) * pageLimit;
 
         const whereClause = { active: true };
