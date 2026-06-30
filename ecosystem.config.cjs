@@ -4,7 +4,7 @@ module.exports = {
       name: 'backend',
       script: 'server.js',
       cwd: "/var/www/biodata99/astro/backend/current",
-      instances: 'max',
+      instances: 2,
       exec_mode: 'cluster',
       autorestart: true,
       watch: false,
