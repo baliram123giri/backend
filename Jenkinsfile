@@ -30,7 +30,7 @@ pipeline {
                         --exclude=.env.example \
                         --exclude="*.pem" \
                         --exclude="*.key" \
-                        ./backend/ "$RELEASE/"
+                        ./ "$RELEASE/"
 
                     cd "$RELEASE"
 
