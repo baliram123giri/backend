@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    triggers {
+        githubPush()
+    }
+
     environment {
         PROD_BASE = "/var/www/biodata99/astro/backend"
         KEEP_RELEASES = "3"
@@ -20,6 +24,7 @@ pipeline {
 
                     echo "Creating release directory"
                     mkdir -p "$RELEASE"
+                    mkdir -p "$RELEASE/logs"
 
                     echo "Copying source code"
                     rsync -a \
@@ -56,11 +61,8 @@ pipeline {
 
                     echo "Restarting PM2 process system-wide"
 
-                    if sudo pm2 describe "$APP_NAME" > /dev/null 2>&1; then
-                        sudo pm2 reload ecosystem.config.cjs --only "$APP_NAME" --env production --update-env
-                    else
-                        sudo pm2 start ecosystem.config.cjs --only "$APP_NAME" --env production
-                    fi
+                    sudo pm2 delete "$APP_NAME" || true
+                    sudo pm2 start ecosystem.config.cjs --only "$APP_NAME" --env production
 
                     sudo pm2 save --force
 
