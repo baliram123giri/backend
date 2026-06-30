@@ -1,7 +1,36 @@
 import { prisma } from '../../lib/prisma.js';
 import nodemailer from 'nodemailer';
+import { getCachedOrFetch } from '../../lib/redis.js';
+
+const SETTINGS_CACHE_KEY = "admin:review-settings";
 
 export default async function routes(app, options) {
+app.get('/api/review-settings', async (request, reply) => {
+  try {
+    const settings = await getCachedOrFetch(SETTINGS_CACHE_KEY, 3600, async () => {
+      return prisma.reviewSettings.upsert({
+        where: { id: "global" },
+        update: {},
+        create: {
+          id: "global",
+          googleEnabled: true,
+          googleRating: 4.9,
+          googleCount: 524,
+          googleUrl: "https://share.google/T4eEjxMJkqDKaFWGN",
+          trustpilotEnabled: true,
+          trustpilotRating: 4.8,
+          trustpilotCount: 320,
+          trustpilotUrl: "https://www.trustpilot.com/review/biodata99.com",
+        }
+      });
+    });
+    return reply.send({ success: true, settings });
+  } catch (error) {
+    app.log.error('GET Public Review Settings Error:', error);
+    return reply.status(500).send({ error: 'Failed to fetch review settings' });
+  }
+});
+
 app.post('/api/feedback', {
   schema: {
     body: {
