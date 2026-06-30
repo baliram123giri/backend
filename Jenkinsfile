@@ -8,12 +8,6 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
         stage('Deploy PROD') {
             steps {
                 sh '''
@@ -36,7 +30,7 @@ pipeline {
                         --exclude=.env.example \
                         --exclude="*.pem" \
                         --exclude="*.key" \
-                        ./ "$RELEASE/"
+                        ./backend/ "$RELEASE/"
 
                     cd "$RELEASE"
 
