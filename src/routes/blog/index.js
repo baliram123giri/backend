@@ -8,6 +8,19 @@ export default async function routes(app, options) {
       const cacheKey = 'blog:posts:all';
       const data = await getCachedOrFetch(cacheKey, 60, async () => {
         const posts = await prisma.blogPost.findMany({
+          select: {
+            id: true,
+            slug: true,
+            title: true,
+            description: true,
+            thumbnailUrl: true,
+            publishDate: true,
+            readTime: true,
+            category: true,
+            language: true,
+            author: true,
+            createdAt: true,
+          },
           orderBy: { createdAt: 'desc' },
         });
         return { success: true, posts };
