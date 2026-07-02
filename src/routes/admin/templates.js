@@ -124,7 +124,7 @@ export default async function adminTemplateRoutes(fastify, options) {
 
       let finalThumbnailUrl = thumbnailUrl || '';
       if (thumbnailFile) {
-        finalThumbnailUrl = await uploadToVPS(thumbnailUrl, 'thumbnails');
+        finalThumbnailUrl = await uploadToVPS(thumbnailFile, 'thumbnails');
       }
 
       let finalPreviewUrl = null;

@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import sharp from "sharp";
 
 // Resolve client public uploads path relative to backend
 const CLIENT_UPLOADS_DIR = path.resolve("d:/AstroAppBiodata/client/public/uploads");
@@ -54,20 +55,42 @@ export async function uploadToVPS(fileStr, subFolder) {
     mimeType = "image/png"; // default fallback
   }
 
+  const isSvg =
+    mimeType === "image/svg+xml" ||
+    mimeType.includes("svg") ||
+    (buffer && buffer.toString("utf-8").trim().startsWith("<svg")) ||
+    (buffer && buffer.toString("utf-8").includes("http://www.w3.org/2000/svg"));
+
+  if (isSvg) {
+    mimeType = "image/svg+xml";
+  }
+
   // Server-side Size Validation: Max 10MB
   if (buffer.length > 10 * 1024 * 1024) {
     throw new Error("File size exceeds 10MB limit");
   }
 
+  // Convert raster images to compressed WebP
+  if (!isSvg) {
+    try {
+      buffer = await sharp(buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
+      mimeType = "image/webp";
+    } catch (err) {
+      console.error("Failed to compress image with sharp, falling back to original:", err);
+    }
+  }
+
   const filename = crypto.randomUUID();
   let extension = "";
 
-  if (mimeType === "image/svg+xml" || mimeType.includes("svg")) {
+  if (isSvg) {
     extension = ".svg";
-  } else if (mimeType.includes("png")) {
-    extension = ".png";
   } else if (mimeType.includes("webp")) {
     extension = ".webp";
+  } else if (mimeType.includes("png")) {
+    extension = ".png";
   } else {
     extension = ".jpg";
   }
