@@ -2,6 +2,69 @@ import { prisma, withRetry } from '../../lib/prisma.js';
 import { getCachedOrFetch } from '../../lib/redis.js';
 import { mapDbTemplateToConfig } from '../../../helpers.js';
 
+const templateSelect = {
+  id: true,
+  name: true,
+  description: true,
+  defaultPrimary: true,
+  defaultSecondary: true,
+  defaultAccent: true,
+  defaultPadding: true,
+  defaultYPadding: true,
+  defaultPaddingTop: true,
+  defaultPaddingRight: true,
+  defaultPaddingLeft: true,
+  defaultFontSize: true,
+  photoX: true,
+  photoY: true,
+  photoWidth: true,
+  photoHeight: true,
+  photoCornerRadius: true,
+  photoShowBorder: true,
+  frameType: true,
+  frameUrlTemplate: true,
+  frameBgType: true,
+  frameBgColor: true,
+  frameBgGradientColors: true,
+  frameOuterInset: true,
+  frameOuterStrokeWidth: true,
+  frameOuterCornerRadius: true,
+  frameInnerInset: true,
+  frameInnerStrokeWidth: true,
+  frameInnerCornerRadius: true,
+  frameHasCornerCurves: true,
+  frameGradientColors: true,
+  frameComponentId: true,
+  thumbnailUrl: true,
+  previewPhotoUrl: true,
+  bgConfig: true,
+  detailsLayout: true,
+  titleShape: true,
+  mantraSignPlacement: true,
+  mantraSignVertical: true,
+  language: true,
+  religion: true,
+  gender: true,
+  active: true,
+  isPremium: true,
+  isDefault: true,
+  price: true,
+  discountPrice: true,
+  currency: true,
+  pdfPrice: true,
+  pdfDiscountPrice: true,
+  docxPrice: true,
+  docxDiscountPrice: true,
+  jpgPrice: true,
+  jpgDiscountPrice: true,
+  pngPrice: true,
+  pngDiscountPrice: true,
+  comboPrice: true,
+  comboDiscountPrice: true,
+  createdAt: true,
+  updatedAt: true
+};
+
 export default async function publicTemplateRoutes(app, options) {
   // -------------------------------------------------------------
   // 1. GET /api/templates
@@ -28,18 +91,21 @@ export default async function publicTemplateRoutes(app, options) {
             withRetry(() =>
               prisma.template.findFirst({
                 where: { ...whereClause, isDefault: true },
+                select: templateSelect,
               })
             ),
             withRetry(() =>
               prisma.template.findFirst({
                 where: whereClause,
                 orderBy: { createdAt: 'desc' },
+                select: templateSelect,
               })
             ),
             withRetry(() =>
               prisma.template.findFirst({
                 where: { active: true },
                 orderBy: { createdAt: 'desc' },
+                select: templateSelect,
               })
             )
           ]);
@@ -57,6 +123,7 @@ export default async function publicTemplateRoutes(app, options) {
                   where: { ...whereClause, id: { not: finalPrimaryTemplate.id } },
                   orderBy: { createdAt: 'desc' },
                   take: limit - 1,
+                  select: templateSelect,
                 })
               ),
               withRetry(() => prisma.template.count({ where: whereClause })),
@@ -73,6 +140,7 @@ export default async function publicTemplateRoutes(app, options) {
           const dbTemplate = await withRetry(() =>
             prisma.template.findUnique({
               where: { id: templateId, active: true },
+              select: templateSelect,
             })
           );
 
@@ -95,6 +163,7 @@ export default async function publicTemplateRoutes(app, options) {
               orderBy: { createdAt: 'desc' },
               skip,
               take: pageLimit,
+              select: templateSelect,
             })
           ),
           withRetry(() => prisma.template.count({ where: whereClause })),

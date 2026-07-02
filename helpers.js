@@ -186,7 +186,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     titleShape: dbTpl.titleShape || "simple",
     mantraSignPlacement: dbTpl.mantraSignPlacement || "both",
     mantraSignVertical: dbTpl.mantraSignVertical || "top",
-    rawInput: dbTpl.rawInput || undefined,
+    rawInput: sanitizeRawInput(dbTpl.rawInput),
     religion: dbTpl.religion || "Hindu",
     isPremium: dbTpl.isPremium === true,
     isDefault: dbTpl.isDefault === true,
@@ -205,4 +205,28 @@ export function mapDbTemplateToConfig(dbTpl) {
     comboDiscountPrice: dbTpl.comboDiscountPrice ?? null,
     fontSize: dbTpl.defaultFontSize ?? undefined,
   });
+}
+
+export function sanitizeRawInput(rawInput) {
+  if (!rawInput) return undefined;
+  try {
+    const raw = typeof rawInput === "string" ? JSON.parse(rawInput) : JSON.parse(JSON.stringify(rawInput));
+    if (raw && typeof raw === "object") {
+      const clean = {};
+      if ('title' in raw) clean.title = raw.title;
+      if ('mantra' in raw) clean.mantra = raw.mantra;
+      if ('language' in raw) clean.language = raw.language;
+      if ('community' in raw) clean.community = raw.community;
+      if ('personalTitle' in raw) clean.personalTitle = raw.personalTitle;
+      if ('educationTitle' in raw) clean.educationTitle = raw.educationTitle;
+      if ('familyTitle' in raw) clean.familyTitle = raw.familyTitle;
+      if ('contactTitle' in raw) clean.contactTitle = raw.contactTitle;
+      if ('headerSymbol' in raw) clean.headerSymbol = raw.headerSymbol;
+      return clean;
+    }
+    return raw;
+  } catch (e) {
+    console.error("Error sanitizing rawInput:", e);
+    return undefined;
+  }
 }
