@@ -14,8 +14,13 @@ const CLIENT_UPLOADS_DIR = process.platform === "win32"
  * @returns {string}
  */
 export function convertToFullUrl(url) {
-  if (typeof url === "string" && url.startsWith("/uploads/")) {
-    return `https://img.biodata99.com/biodata${url.substring("/uploads".length)}`;
+  if (typeof url === "string") {
+    if (url.startsWith("/uploads/")) {
+      return `https://img.biodata99.com/biodata${url.substring("/uploads".length)}`;
+    }
+    if (url.startsWith("https://img.biodata99.com/matrimonial/")) {
+      return `https://img.biodata99.com/biodata${url.substring("https://img.biodata99.com/matrimonial".length)}`;
+    }
   }
   return url;
 }
@@ -132,6 +137,8 @@ export async function deleteFromVPS(url) {
       relativePath = url.substring("/uploads/".length);
     } else if (url.startsWith("https://img.biodata99.com/biodata/")) {
       relativePath = url.substring("https://img.biodata99.com/biodata/".length);
+    } else if (url.startsWith("https://img.biodata99.com/matrimonial/")) {
+      relativePath = url.substring("https://img.biodata99.com/matrimonial/".length);
     } else {
       return; // Not a VPS uploaded image
     }

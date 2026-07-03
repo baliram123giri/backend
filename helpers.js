@@ -184,6 +184,8 @@ export function mapDbTemplateToConfig(dbTpl) {
     language: dbTpl.language || "English",
     detailsLayout: dbTpl.detailsLayout || "classic",
     titleShape: dbTpl.titleShape || "simple",
+    defaultHeadingAlign: dbTpl.defaultHeadingAlign || "left",
+    sectionHeadingShape: dbTpl.sectionHeadingShape || "simple",
     mantraSignPlacement: dbTpl.mantraSignPlacement || "both",
     mantraSignVertical: dbTpl.mantraSignVertical || "top",
     rawInput: sanitizeRawInput(dbTpl.rawInput),

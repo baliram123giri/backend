@@ -192,6 +192,8 @@ export default async function adminTemplateRoutes(fastify, options) {
           language: language || 'English',
           detailsLayout: detailsLayout || 'classic',
           titleShape: titleShape || 'simple',
+          defaultHeadingAlign: body.defaultHeadingAlign || 'left',
+          sectionHeadingShape: body.sectionHeadingShape || 'simple',
           mantraSignPlacement: mantraSignPlacement || 'both',
           mantraSignVertical: mantraSignVertical || 'top',
           photoShowBorder: photoShowBorder !== false,
@@ -241,7 +243,7 @@ export default async function adminTemplateRoutes(fastify, options) {
       const fields = [
         "name", "description", "defaultPrimary", "defaultSecondary", "defaultAccent",
         "frameType", "frameBgType", "frameBgColor", "frameComponentId", "language",
-        "active", "detailsLayout", "titleShape", "mantraSignPlacement", "mantraSignVertical",
+        "active", "detailsLayout", "titleShape", "defaultHeadingAlign", "sectionHeadingShape", "mantraSignPlacement", "mantraSignVertical",
         "religion", "gender", "rawInput"
       ];
 
