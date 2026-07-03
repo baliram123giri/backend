@@ -20,8 +20,8 @@ export default async function adminFeedbackRoutes(app, options) {
     }
   });
 
-  // POST delete feedback
-  app.post('/feedback/delete', async (request, reply) => {
+  // DELETE feedback
+  app.delete('/feedback', async (request, reply) => {
     try {
       const { id, ids } = request.body;
       const targetIds = ids || (id ? [id] : null);
