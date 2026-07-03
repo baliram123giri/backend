@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { getCachedOrFetch, redis } from '../../lib/redis.js';
-import { uploadToVPS, deleteFromVPS } from '../../lib/vps-upload.js';
+import { uploadToVPS, deleteFromVPS, convertToFullUrl } from '../../lib/vps-upload.js';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText } from 'ai';
 
@@ -120,16 +120,38 @@ export default async function adminTemplateRoutes(fastify, options) {
       let finalFrameUrl = frameUrlTemplate || '';
       if (frameFile) {
         finalFrameUrl = await uploadToVPS(frameFile, 'frames');
+      } else {
+        finalFrameUrl = convertToFullUrl(finalFrameUrl);
       }
 
       let finalThumbnailUrl = thumbnailUrl || '';
       if (thumbnailFile) {
         finalThumbnailUrl = await uploadToVPS(thumbnailFile, 'thumbnails');
+      } else {
+        finalThumbnailUrl = convertToFullUrl(finalThumbnailUrl);
       }
 
       let finalPreviewUrl = null;
       if (previewPhotoFile) {
         finalPreviewUrl = await uploadToVPS(previewPhotoFile, 'previews');
+      } else if (previewPhotoUrl) {
+        finalPreviewUrl = convertToFullUrl(previewPhotoUrl);
+      }
+
+      let finalBgConfig = null;
+      if (bgConfig) {
+        const bgConfigData = typeof bgConfig === 'string' ? JSON.parse(bgConfig) : { ...bgConfig };
+        if (bgConfigData.file) {
+          bgConfigData.url = await uploadToVPS(bgConfigData.file, 'backgrounds');
+          delete bgConfigData.file;
+        }
+        if (bgConfigData.url) {
+          bgConfigData.url = convertToFullUrl(bgConfigData.url);
+        }
+        if (bgConfigData.mantraSignUrl) {
+          bgConfigData.mantraSignUrl = convertToFullUrl(bgConfigData.mantraSignUrl);
+        }
+        finalBgConfig = bgConfigData;
       }
 
       const template = await prisma.template.create({
@@ -166,7 +188,7 @@ export default async function adminTemplateRoutes(fastify, options) {
           rawInput: rawInput || undefined,
           religion: religion || 'General',
           gender: gender || 'both',
-          bgConfig: bgConfig || undefined,
+          bgConfig: finalBgConfig || undefined,
           language: language || 'English',
           detailsLayout: detailsLayout || 'classic',
           titleShape: titleShape || 'simple',
@@ -280,7 +302,7 @@ export default async function adminTemplateRoutes(fastify, options) {
         }
         updateData.frameUrlTemplate = await uploadToVPS(body.frameFile, 'frames');
       } else if (body.frameUrlTemplate !== undefined) {
-        updateData.frameUrlTemplate = body.frameUrlTemplate;
+        updateData.frameUrlTemplate = convertToFullUrl(body.frameUrlTemplate);
       }
 
       if (body.thumbnailFile) {
@@ -289,7 +311,7 @@ export default async function adminTemplateRoutes(fastify, options) {
         }
         updateData.thumbnailUrl = await uploadToVPS(body.thumbnailFile, 'thumbnails');
       } else if (body.thumbnailUrl !== undefined) {
-        updateData.thumbnailUrl = body.thumbnailUrl;
+        updateData.thumbnailUrl = convertToFullUrl(body.thumbnailUrl);
       }
 
       if (body.previewPhotoFile) {
@@ -298,7 +320,7 @@ export default async function adminTemplateRoutes(fastify, options) {
         }
         updateData.previewPhotoUrl = await uploadToVPS(body.previewPhotoFile, 'previews');
       } else if (body.previewPhotoUrl !== undefined) {
-        updateData.previewPhotoUrl = body.previewPhotoUrl;
+        updateData.previewPhotoUrl = convertToFullUrl(body.previewPhotoUrl);
       }
 
       // Background configurations
@@ -320,6 +342,12 @@ export default async function adminTemplateRoutes(fastify, options) {
             }
             bgConfigData.url = await uploadToVPS(bgConfigData.file, 'backgrounds');
             delete bgConfigData.file;
+          }
+          if (bgConfigData.url) {
+            bgConfigData.url = convertToFullUrl(bgConfigData.url);
+          }
+          if (bgConfigData.mantraSignUrl) {
+            bgConfigData.mantraSignUrl = convertToFullUrl(bgConfigData.mantraSignUrl);
           }
           updateData.bgConfig = bgConfigData;
         }

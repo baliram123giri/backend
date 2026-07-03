@@ -4,7 +4,21 @@ import crypto from "crypto";
 import sharp from "sharp";
 
 // Resolve client public uploads path relative to backend
-const CLIENT_UPLOADS_DIR = path.resolve("d:/AstroAppBiodata/client/public/uploads");
+const CLIENT_UPLOADS_DIR = process.platform === "win32"
+  ? path.resolve("d:/AstroAppBiodata/client/public/uploads")
+  : "/var/www/biodata99/uploads";
+
+/**
+ * Converts a legacy relative URL starting with /uploads/ to a full CDN path
+ * @param {string} url 
+ * @returns {string}
+ */
+export function convertToFullUrl(url) {
+  if (typeof url === "string" && url.startsWith("/uploads/")) {
+    return `https://img.biodata99.com/biodata${url.substring("/uploads".length)}`;
+  }
+  return url;
+}
 
 /**
  * Uploads a base64 encoded image to the client public directory.
@@ -101,8 +115,8 @@ export async function uploadToVPS(fileStr, subFolder) {
   // Write file to filesystem
   fs.writeFileSync(destFilePath, buffer);
   
-  // Return the public URL relative to Astro server root
-  return `/uploads/${normalizedSubFolder}/${finalFilename}`;
+  // Return the full public URL with domain
+  return `https://img.biodata99.com/biodata/${normalizedSubFolder}/${finalFilename}`;
 }
 
 /**
@@ -110,10 +124,18 @@ export async function uploadToVPS(fileStr, subFolder) {
  * @param {string} url The public URL of the file to delete
  */
 export async function deleteFromVPS(url) {
-  if (!url || !url.startsWith("/uploads/")) return;
+  if (!url) return;
 
   try {
-    const relativePath = url.substring("/uploads/".length);
+    let relativePath = "";
+    if (url.startsWith("/uploads/")) {
+      relativePath = url.substring("/uploads/".length);
+    } else if (url.startsWith("https://img.biodata99.com/biodata/")) {
+      relativePath = url.substring("https://img.biodata99.com/biodata/".length);
+    } else {
+      return; // Not a VPS uploaded image
+    }
+
     const filePath = path.join(CLIENT_UPLOADS_DIR, ...relativePath.split("/"));
 
     if (fs.existsSync(filePath)) {
