@@ -15,8 +15,6 @@ async function main() {
         stickerCount++;
       }
     }
-    console.log(`Updated ${stickerCount} stickers.`);
-
     // 2. Update Backgrounds
     const backgrounds = await prisma.background.findMany();
     let backgroundCount = 0;
@@ -30,7 +28,6 @@ async function main() {
         backgroundCount++;
       }
     }
-    console.log(`Updated ${backgroundCount} backgrounds.`);
 
     // 3. Update Templates
     const templates = await prisma.template.findMany();
