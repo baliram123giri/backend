@@ -6,7 +6,7 @@ import sharp from "sharp";
 // Resolve client public uploads path relative to backend
 const CLIENT_UPLOADS_DIR = process.platform === "win32"
   ? path.resolve("d:/AstroAppBiodata/client/public/uploads")
-  : "/var/www/biodata99/uploads";
+  : "/var/www/biodata99/uploads/biodata";
 
 /**
  * Converts a legacy relative URL starting with /uploads/ to a full CDN path
