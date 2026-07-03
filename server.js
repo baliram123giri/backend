@@ -20,7 +20,10 @@ Sentry.init({
 });
 
 // Create Fastify server
-const app = fastify({ logger: loggerConfig });
+const app = fastify({ 
+  logger: loggerConfig,
+  bodyLimit: 50 * 1024 * 1024 // 50MB limit to handle large base64 template images
+});
 
 // Register CORS
 await app.register(fastifyCors, {
