@@ -8,6 +8,7 @@ import adminBlogRoutes from './blog.js';
 import adminBackgroundRoutes from './backgrounds.js';
 import adminStickersRoutes from './stickers.js';
 import adminMantrasRoutes from './mantras.js';
+import adminFlushCacheRoutes from './flush-cache.js';
 import { adminAuth } from '../../middleware/adminAuth.js';
 
 export default async function adminRoutes(fastify, options) {
@@ -25,4 +26,5 @@ export default async function adminRoutes(fastify, options) {
   fastify.register(adminBackgroundRoutes);
   fastify.register(adminStickersRoutes);
   fastify.register(adminMantrasRoutes);
+  fastify.register(adminFlushCacheRoutes);
 }

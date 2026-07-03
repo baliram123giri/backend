@@ -12,6 +12,11 @@ export let redis = null;
 
 const memoryCache = new Map();
 
+export function clearMemoryCache() {
+  memoryCache.clear();
+  logger.info('L1 Memory Cache manually cleared completely');
+}
+
 try {
   redis = new Redis(redisUrl, {
     maxRetriesPerRequest: 3,
