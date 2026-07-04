@@ -31,6 +31,17 @@ await app.register(fastifyCors, {
   credentials: true,
 });
 
+// Set X-Robots-Tag header on all API responses to prevent indexing
+app.addHook('onRequest', async (request, reply) => {
+  reply.header('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+});
+
+// Serve robots.txt to disallow all crawlers
+app.get('/robots.txt', async (request, reply) => {
+  reply.type('text/plain');
+  return 'User-agent: *\nDisallow: /\n';
+});
+
 // Register all modular routes
 app.register(appRoutes);
 
