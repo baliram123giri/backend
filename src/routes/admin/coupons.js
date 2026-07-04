@@ -25,8 +25,13 @@ export default async function adminCouponsRoutes(app, options) {
     try {
       const { code, discountType, discountValue, active, isPublic, maxUses, expiresAt } = request.body;
 
-      if (!code || !discountType || discountValue === undefined) {
-        return reply.status(400).send({ error: 'Code, discountType, and discountValue are required fields' });
+      const missingFields = [];
+      if (!code) missingFields.push('code');
+      if (!discountType) missingFields.push('discountType');
+      if (discountValue === undefined) missingFields.push('discountValue');
+
+      if (missingFields.length > 0) {
+        return reply.status(400).send({ error: `Missing required fields: ${missingFields.join(', ')}` });
       }
 
       const cleanCode = code.trim().toUpperCase();
@@ -64,36 +69,40 @@ export default async function adminCouponsRoutes(app, options) {
     }
   });
 
-  // PUT update a coupon by ID
-  app.put('/coupons/:id', async (request, reply) => {
-    try {
-      const { id } = request.params;
-      const { active, isPublic, code, discountType, discountValue, maxUses, expiresAt } = request.body;
+  // PUT/PATCH update a coupon by ID
+  app.route({
+    method: ['PUT', 'PATCH'],
+    url: '/coupons/:id',
+    handler: async (request, reply) => {
+      try {
+        const { id } = request.params;
+        const { active, isPublic, code, discountType, discountValue, maxUses, expiresAt } = request.body;
 
-      const dataToUpdate = {};
-      if (active !== undefined) dataToUpdate.active = active;
-      if (isPublic !== undefined) dataToUpdate.isPublic = isPublic;
-      if (code !== undefined) dataToUpdate.code = code.trim().toUpperCase();
-      if (discountType !== undefined) dataToUpdate.discountType = discountType;
-      if (discountValue !== undefined) dataToUpdate.discountValue = parseFloat(discountValue);
-      if (maxUses !== undefined) dataToUpdate.maxUses = maxUses ? parseInt(maxUses) : null;
-      if (expiresAt !== undefined) dataToUpdate.expiresAt = expiresAt ? new Date(expiresAt) : null;
+        const dataToUpdate = {};
+        if (active !== undefined) dataToUpdate.active = active;
+        if (isPublic !== undefined) dataToUpdate.isPublic = isPublic;
+        if (code !== undefined) dataToUpdate.code = code.trim().toUpperCase();
+        if (discountType !== undefined) dataToUpdate.discountType = discountType;
+        if (discountValue !== undefined) dataToUpdate.discountValue = parseFloat(discountValue);
+        if (maxUses !== undefined) dataToUpdate.maxUses = maxUses ? parseInt(maxUses) : null;
+        if (expiresAt !== undefined) dataToUpdate.expiresAt = expiresAt ? new Date(expiresAt) : null;
 
-      const updated = await prisma.coupon.update({
-        where: { id },
-        data: dataToUpdate
-      });
+        const updated = await prisma.coupon.update({
+          where: { id },
+          data: dataToUpdate
+        });
 
-      // Invalidate cache
-      if (redis && redis.status === 'ready') {
-        await redis.del(CACHE_KEY);
-        await redis.del('active-coupons');
+        // Invalidate cache
+        if (redis && redis.status === 'ready') {
+          await redis.del(CACHE_KEY);
+          await redis.del('active-coupons');
+        }
+
+        return reply.send({ success: true, coupon: updated });
+      } catch (error) {
+        app.log.error('Update Coupon Error:', error);
+        return reply.status(500).send({ error: 'Failed to update coupon' });
       }
-
-      return reply.send({ success: true, coupon: updated });
-    } catch (error) {
-      app.log.error('Update Coupon Error:', error);
-      return reply.status(500).send({ error: 'Failed to update coupon' });
     }
   });
 

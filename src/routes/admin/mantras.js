@@ -19,8 +19,12 @@ export default async function adminMantrasRoutes(fastify, options) {
   fastify.post('/mantras', async (request, reply) => {
     try {
       const { religion, text, nativeText, meaning } = request.body;
-      if (!religion || !text) {
-        return reply.status(400).send({ error: 'Religion and text are required' });
+      const missingFields = [];
+      if (!religion) missingFields.push('religion');
+      if (!text) missingFields.push('text');
+
+      if (missingFields.length > 0) {
+        return reply.status(400).send({ error: `Missing required fields: ${missingFields.join(', ')}` });
       }
 
       const mantra = await prisma.mantra.create({

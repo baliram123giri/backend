@@ -113,8 +113,15 @@ export default async function adminTemplateRoutes(fastify, options) {
         rawInput, religion, isDefault, gender, frameUrlTemplate, thumbnailUrl
       } = body;
 
-      if (!name || !defaultPrimary || !defaultSecondary || !defaultAccent || !frameType) {
-        return reply.status(400).send({ error: 'Missing required fields' });
+      const missingFields = [];
+      if (!name) missingFields.push('name');
+      if (!defaultPrimary) missingFields.push('defaultPrimary');
+      if (!defaultSecondary) missingFields.push('defaultSecondary');
+      if (!defaultAccent) missingFields.push('defaultAccent');
+      if (!frameType) missingFields.push('frameType');
+
+      if (missingFields.length > 0) {
+        return reply.status(400).send({ error: `Missing required fields: ${missingFields.join(', ')}` });
       }
 
       if (isDefault === true) {

@@ -19,8 +19,13 @@ export default async function adminBlogRoutes(app, options) {
     try {
       const { title, description, slug, publishDate, readTime, category, language, thumbnailUrl, author, content } = request.body;
 
-      if (!title || !description || !content) {
-        return reply.status(400).send({ error: 'Title, description, and content are required fields' });
+      const missingFields = [];
+      if (!title) missingFields.push('title');
+      if (!description) missingFields.push('description');
+      if (!content) missingFields.push('content');
+
+      if (missingFields.length > 0) {
+        return reply.status(400).send({ error: `Missing required fields: ${missingFields.join(', ')}` });
       }
 
       // Auto-generate slug from title if not supplied

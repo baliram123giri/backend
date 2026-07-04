@@ -43,8 +43,12 @@ export default async function adminStickersRoutes(fastify, options) {
   fastify.post('/stickers', async (request, reply) => {
     try {
       const { name, type, religion, file } = request.body;
-      if (!name || !file) {
-        return reply.status(400).send({ error: 'Name and file are required' });
+      const missingFields = [];
+      if (!name) missingFields.push('name');
+      if (!file) missingFields.push('file');
+
+      if (missingFields.length > 0) {
+        return reply.status(400).send({ error: `Missing required fields: ${missingFields.join(', ')}` });
       }
 
       // Upload file to VPS
