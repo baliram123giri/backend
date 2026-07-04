@@ -109,7 +109,7 @@ export default async function adminTemplateRoutes(fastify, options) {
         frameFile, thumbnailFile, bgConfig, language, detailsLayout, titleShape,
         mantraSignPlacement, mantraSignVertical, photoShowBorder, isPremium, price,
         discountPrice, currency, pdfPrice, pdfDiscountPrice, docxPrice, docxDiscountPrice, jpgPrice, jpgDiscountPrice,
-        pngPrice, pngDiscountPrice, comboPrice, comboDiscountPrice, previewPhotoFile,
+        pngPrice, pngDiscountPrice, comboPrice, comboDiscountPrice, previewPhotoFile, previewPhotoUrl,
         rawInput, religion, isDefault, gender, frameUrlTemplate, thumbnailUrl
       } = body;
 
