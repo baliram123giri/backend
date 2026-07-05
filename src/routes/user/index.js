@@ -1,10 +1,128 @@
 import { prisma } from '../../lib/prisma.js';
 import nodemailer from 'nodemailer';
 import { getCachedOrFetch } from '../../lib/redis.js';
+import { mapDbTemplateToConfig } from '../../../helpers.js';
 
 const SETTINGS_CACHE_KEY = "admin:review-settings";
 
+const templateSelect = {
+  id: true,
+  name: true,
+  description: true,
+  defaultPrimary: true,
+  defaultSecondary: true,
+  defaultAccent: true,
+  defaultPadding: true,
+  defaultYPadding: true,
+  defaultPaddingTop: true,
+  defaultPaddingRight: true,
+  defaultPaddingLeft: true,
+  defaultFontSize: true,
+  photoX: true,
+  photoY: true,
+  photoWidth: true,
+  photoHeight: true,
+  photoCornerRadius: true,
+  photoShowBorder: true,
+  frameType: true,
+  frameUrlTemplate: true,
+  frameBgType: true,
+  frameBgColor: true,
+  frameBgGradientColors: true,
+  frameOuterInset: true,
+  frameOuterStrokeWidth: true,
+  frameOuterCornerRadius: true,
+  frameInnerInset: true,
+  frameInnerStrokeWidth: true,
+  frameInnerCornerRadius: true,
+  frameHasCornerCurves: true,
+  frameGradientColors: true,
+  frameComponentId: true,
+  thumbnailUrl: true,
+  previewPhotoUrl: true,
+  rawInput: true,
+  bgConfig: true,
+  detailsLayout: true,
+  titleShape: true,
+  defaultHeadingAlign: true,
+  sectionHeadingShape: true,
+  mantraSignPlacement: true,
+  mantraSignVertical: true,
+  language: true,
+  religion: true,
+  gender: true,
+  active: true,
+  isPremium: true,
+  isDefault: true,
+  price: true,
+  discountPrice: true,
+  currency: true,
+  pdfPrice: true,
+  pdfDiscountPrice: true,
+  docxPrice: true,
+  docxDiscountPrice: true,
+  jpgPrice: true,
+  jpgDiscountPrice: true,
+  pngPrice: true,
+  pngDiscountPrice: true,
+  comboPrice: true,
+  comboDiscountPrice: true,
+  createdAt: true,
+  updatedAt: true
+};
+
 export default async function routes(app, options) {
+app.get('/api/bootstrap', async (request, reply) => {
+  try {
+    const data = await getCachedOrFetch('templates:bootstrap', 300, async () => {
+      const [dbTemplates, dbStickers, dbBackgrounds, dbReviewSettings] = await Promise.all([
+        prisma.template.findMany({
+          where: { active: true, isDefault: true },
+          select: templateSelect,
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        }),
+        prisma.sticker.findMany({
+          where: { type: 'Mantra' },
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        }),
+        prisma.background.findMany({
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        }),
+        prisma.reviewSettings.upsert({
+          where: { id: "global" },
+          update: {},
+          create: {
+            id: "global",
+            googleEnabled: true,
+            googleRating: 4.9,
+            googleCount: 524,
+            googleUrl: "https://share.google/T4eEjxMJkqDKaFWGN",
+            trustpilotEnabled: true,
+            trustpilotRating: 4.8,
+            trustpilotCount: 320,
+            trustpilotUrl: "https://www.trustpilot.com/review/biodata99.com",
+          }
+        })
+      ]);
+
+      return {
+        templates: dbTemplates.map(mapDbTemplateToConfig),
+        stickers: dbStickers,
+        backgrounds: dbBackgrounds,
+        reviewSettings: dbReviewSettings
+      };
+    });
+
+    return reply.send({ success: true, ...data });
+  } catch (error) {
+    app.log.error('GET Bootstrap Error:', error);
+    return reply.status(500).send({ success: false, error: 'Failed to bootstrap application data' });
+  }
+});
+
 app.get('/api/review-settings', async (request, reply) => {
   try {
     const settings = await getCachedOrFetch(SETTINGS_CACHE_KEY, 3600, async () => {

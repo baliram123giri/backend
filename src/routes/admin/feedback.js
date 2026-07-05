@@ -118,6 +118,7 @@ export default async function adminFeedbackRoutes(app, options) {
       if (redis && redis.status === 'ready') {
         await redis.del(SETTINGS_CACHE_KEY);
         await redis.del('public:footer-reviews'); // Invalidate public cache if present
+        await redis.del('templates:bootstrap');
       }
 
       return reply.send({ success: true, settings });

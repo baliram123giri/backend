@@ -11,6 +11,7 @@ export default async function adminBackgroundRoutes(fastify, options) {
         if (keys && keys.length > 0) {
           await redis.del(keys);
         }
+        await redis.del('templates:bootstrap');
       } catch (err) {
         fastify.log.error('Clear background caches error:', err);
       }
