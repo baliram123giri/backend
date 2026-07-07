@@ -74,11 +74,23 @@ export async function uploadToVPS(fileStr, subFolder) {
     mimeType = "image/png"; // default fallback
   }
 
+  // Find first non-whitespace byte to check if it begins as an XML/SVG document
+  let firstNonWhitespaceByte = 0;
+  if (buffer) {
+    for (let i = 0; i < Math.min(buffer.length, 100); i++) {
+      const byte = buffer[i];
+      if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0A && byte !== 0x0D) {
+        firstNonWhitespaceByte = byte;
+        break;
+      }
+    }
+  }
+
   const isSvg =
-    mimeType === "image/svg+xml" ||
-    mimeType.includes("svg") ||
-    (buffer && buffer.toString("utf-8").trim().startsWith("<svg")) ||
-    (buffer && buffer.toString("utf-8").includes("http://www.w3.org/2000/svg"));
+    firstNonWhitespaceByte === 0x3C && // Must start with '<' (ASCII 60)
+    (mimeType === "image/svg+xml" ||
+      mimeType.includes("svg") ||
+      (buffer && /<svg/i.test(buffer.toString("utf-8"))));
 
   if (isSvg) {
     mimeType = "image/svg+xml";
