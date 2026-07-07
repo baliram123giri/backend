@@ -162,6 +162,9 @@ model Order {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  referralCode      String?
+  cookieId          String?
+  localStorageId    String?
   downloadLogs      DownloadLog[]
 }
 
@@ -210,4 +213,77 @@ model ReviewSettings {
   trustpilotCount  Int      @default(320)
   trustpilotUrl    String   @default("https://www.trustpilot.com/review/biodata99.com")
   updatedAt        DateTime @updatedAt
+}
+
+model Affiliate {
+  id                  String            @id @default(uuid())
+  name                String
+  email               String            @unique
+  password            String
+  status              String            @default("pending") // "pending", "approved", "rejected", "suspended"
+  code                String            @unique // unique referral code like BG1025
+  channelType         String?           // e.g. "Bloggers", "YouTubers", etc.
+  channelUrl          String?
+  upiId               String?
+  bankAccountName     String?
+  bankAccountNumber   String?
+  bankIfsc            String?
+  totalClicks         Int               @default(0)
+  uniqueVisitors      Int               @default(0)
+  commissionRate      Float             @default(10.0) // custom commission override (e.g. 10.0 for 10%)
+  phone               String?
+  tier                String?           @default("standard") // "standard", "gold", "platinum"
+  adminNotes          String?           @db.Text
+  passwordResetToken  String?           // secure random hex token for password reset
+  passwordResetExpiry DateTime?         // token expiry (15 minutes from issue)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  
+  clicks              ReferralClick[]
+  commissions         Commission[]
+  withdrawals         Withdrawal[]
+}
+
+model ReferralClick {
+  id             String    @id @default(uuid())
+  affiliateId    String
+  affiliate      Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  code           String
+  ipAddress      String?
+  userAgent      String?
+  cookieId       String?
+  localStorageId String?
+  createdAt      DateTime  @default(now())
+}
+
+model Commission {
+  id               String      @id @default(uuid())
+  affiliateId      String
+  affiliate        Affiliate   @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  orderId          String?     @unique
+  orderAmount      Float
+  commissionAmount Float
+  status           String      @default("pending") // "pending", "approved", "paid", "rejected"
+  approvedAt       DateTime?
+  paidAt           DateTime?
+  withdrawalId     String?
+  withdrawal       Withdrawal? @relation(fields: [withdrawalId], references: [id])
+  notes            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model Withdrawal {
+  id             String       @id @default(uuid())
+  affiliateId    String
+  affiliate      Affiliate    @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  amount         Float
+  status         String       @default("pending") // "pending", "paid", "rejected"
+  paymentMethod  String       // "UPI" or "Bank Transfer"
+  paymentDetails String       // UPI ID or Bank details
+  notes          String?
+  paidAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  commissions    Commission[]
 }

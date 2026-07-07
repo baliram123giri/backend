@@ -1,29 +1,108 @@
 import { prisma, withRetry } from '../../lib/prisma.js';
-import { getCachedOrFetch, redis } from '../../lib/redis.js';
+import { getCachedOrFetch } from '../../lib/redis.js';
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
 
 export default async function routes(app, options) {
-  app.post('/api/razorpay/create-order', {
-    schema: {
-      body: {
-        type: 'object',
-        required: ['amount', 'templateId', 'format'],
-        properties: {
-          amount: { type: 'number', minimum: 1 },
-          currency: { type: 'string', default: 'INR' },
-          templateId: { type: 'string', minLength: 1 },
-          format: { type: 'string', enum: ['pdf', 'docx', 'jpg', 'png', 'combo'] },
-          customerName: { type: ['string', 'null'], nullable: true },
-          customerEmail: { type: ['string', 'null'], nullable: true },
-          customerPhone: { type: ['string', 'null'], nullable: true },
-          couponCode: { type: ['string', 'null'], nullable: true }
+  // 1. GET /api/razorpay/active-coupons
+  app.get('/api/razorpay/active-coupons', async (request, reply) => {
+    try {
+      const cacheKey = 'active-coupons';
+      const data = await getCachedOrFetch(cacheKey, 300, async () => {
+        const coupons = await prisma.coupon.findMany({
+          where: {
+            active: true,
+            isPublic: true,
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: new Date() } },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        const validCoupons = coupons.filter(
+          (c) => c.maxUses === null || c.usedCount < c.maxUses
+        );
+        return validCoupons;
+      });
+      return reply.send({ success: true, coupons: data });
+    } catch (error) {
+      app.log.error('GET active coupons error:', error);
+      return reply.status(500).send({ error: 'Failed to fetch active coupons' });
+    }
+  });
+
+  // 2. POST /api/razorpay/validate-coupon
+  app.post('/api/razorpay/validate-coupon', async (request, reply) => {
+    try {
+      const { code } = request.body || {};
+
+      if (!code) {
+        return reply.status(400).send({ error: 'Coupon code is required' });
+      }
+
+      const cleanCode = code.trim().toUpperCase();
+
+      // Seed default coupons if DB has 0 coupons
+      const count = await prisma.coupon.count();
+      if (count === 0) {
+        try {
+          await prisma.coupon.createMany({
+            data: [
+              { code: 'WELCOME50', discountType: 'percentage', discountValue: 50, active: true },
+              { code: 'LOVE20', discountType: 'percentage', discountValue: 20, active: true },
+              { code: 'FREE100', discountType: 'percentage', discountValue: 100, active: true },
+              { code: 'BIODATA10', discountType: 'fixed', discountValue: 10, active: true },
+            ],
+          });
+        } catch (seedErr) {
+          console.error('Failed to seed default coupons:', seedErr);
         }
       }
+
+      const coupon = await prisma.coupon.findUnique({
+        where: { code: cleanCode },
+      });
+
+      if (!coupon) {
+        return reply.status(404).send({ error: 'Invalid coupon code' });
+      }
+
+      if (!coupon.active) {
+        return reply.status(400).send({ error: 'This coupon is no longer active' });
+      }
+
+      if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) {
+        return reply.status(400).send({ error: 'This coupon has expired' });
+      }
+
+      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+        return reply.status(400).send({ error: 'This coupon usage limit has been reached' });
+      }
+
+      return reply.send({
+        success: true,
+        message: 'Coupon applied successfully',
+        coupon: {
+          code: coupon.code,
+          discountType: coupon.discountType,
+          discountValue: coupon.discountValue,
+        },
+      });
+    } catch (error) {
+      app.log.error('Coupon Validation Error:', error);
+      return reply.status(500).send({ error: 'Failed to validate coupon', details: error.message });
     }
-  }, async (request, reply) => {
+  });
+
+  // 3. POST /api/razorpay/create-order
+  app.post('/api/razorpay/create-order', async (request, reply) => {
     try {
-      const { amount, currency, templateId, format, customerName, customerEmail, customerPhone, couponCode } = request.body;
+      const { amount, currency, templateId, format, customerName, customerEmail, customerPhone, couponCode, ref } = request.body || {};
+
+      if (amount === undefined || amount === null || !templateId || !format) {
+        return reply.status(400).send({ error: 'Amount, templateId, and format are required fields' });
+      }
 
       let discountApplied = 0;
       let finalAmount = parseFloat(amount);
@@ -46,17 +125,13 @@ export default async function routes(app, options) {
             }
             finalAmount = Math.max(0, finalAmount - discountApplied);
 
+            // Update coupon usage count
             withRetry(() =>
               prisma.coupon.update({
                 where: { id: couponRecord.id },
                 data: { usedCount: { increment: 1 } },
               })
             ).catch((e) => console.error('Failed to increment coupon usedCount:', e));
-
-            // Invalidate active coupons cache as count has changed
-            if (redis && redis.status === 'ready') {
-              await redis.del('active-coupons');
-            }
           }
         }
       }
@@ -85,11 +160,12 @@ export default async function routes(app, options) {
               customerPhone: customerPhone || null,
               couponCode: couponCode || null,
               discountApplied: parseFloat(amount),
+              referralCode: ref || null,
             },
           })
         );
 
-        return {
+        return reply.send({
           success: true,
           isFreeOrder: true,
           order: {
@@ -97,12 +173,11 @@ export default async function routes(app, options) {
             amount: 0,
             currency: currency || 'INR',
           },
-        };
+        });
       }
 
       const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
       const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
-
       const isSandbox = !keyId || !keySecret || keyId === 'rzp_test_placeholder' || keySecret === 'placeholder_secret_key';
 
       if (isSandbox) {
@@ -122,11 +197,12 @@ export default async function routes(app, options) {
               customerPhone: customerPhone || null,
               couponCode: couponCode || null,
               discountApplied: discountApplied,
+              referralCode: ref || null,
             },
           })
         );
 
-        return {
+        return reply.send({
           success: true,
           isSandbox: true,
           order: {
@@ -135,7 +211,7 @@ export default async function routes(app, options) {
             currency: currency || 'INR',
           },
           keyId: 'sandbox_key',
-        };
+        });
       }
 
       const razorpay = new Razorpay({
@@ -164,25 +240,24 @@ export default async function routes(app, options) {
             customerPhone: customerPhone || null,
             couponCode: couponCode || null,
             discountApplied: discountApplied,
+            referralCode: ref || null,
           },
         })
       );
 
-      return {
+      return reply.send({
         success: true,
         isSandbox: false,
         order: paymentOrder,
         keyId: keyId,
-      };
+      });
     } catch (error) {
       app.log.error('Create Razorpay Order Error:', error);
-      reply.status(500).send({ error: 'Failed to create order', details: error.message });
+      return reply.status(500).send({ error: 'Failed to create order', details: error.message });
     }
   });
 
-  // -------------------------------------------------------------
-  // 10. POST /api/razorpay/verify-payment
-  // -------------------------------------------------------------
+  // 4. POST /api/razorpay/verify-payment
   app.post('/api/razorpay/verify-payment', async (request, reply) => {
     try {
       const {
@@ -192,11 +267,10 @@ export default async function routes(app, options) {
         razorpay_contact,
         razorpay_email,
         isSandbox,
-      } = request.body;
+      } = request.body || {};
 
       if (!razorpay_order_id) {
-        reply.status(400).send({ error: 'Order ID is required' });
-        return;
+        return reply.status(400).send({ error: 'Order ID is required' });
       }
 
       const buildContactUpdate = (email, phone) => {
@@ -221,16 +295,19 @@ export default async function routes(app, options) {
           })
         );
 
-        return {
+        if (updatedOrder.referralCode) {
+          await createCommissionForOrder(updatedOrder, app);
+        }
+
+        return reply.send({
           success: true,
           message: 'Sandbox payment verified successfully',
           order: updatedOrder,
-        };
+        });
       }
 
       if (!razorpay_payment_id || !razorpay_signature) {
-        reply.status(400).send({ error: 'Payment ID and signature are required for live verification' });
-        return;
+        return reply.status(400).send({ error: 'Payment ID and signature are required for live verification' });
       }
 
       const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
@@ -249,8 +326,7 @@ export default async function routes(app, options) {
           })
         ).catch((e) => console.error('Failed to mark order as failed:', e));
 
-        reply.status(400).send({ error: 'Invalid payment signature' });
-        return;
+        return reply.status(400).send({ error: 'Invalid payment signature' });
       }
 
       let confirmedEmail = razorpay_email || undefined;
@@ -286,131 +362,32 @@ export default async function routes(app, options) {
         })
       );
 
-      return {
+      if (updatedOrder.referralCode) {
+        await createCommissionForOrder(updatedOrder, app);
+      }
+
+      return reply.send({
         success: true,
         message: 'Payment verified and completed successfully',
         order: updatedOrder,
-      };
+      });
     } catch (error) {
       app.log.error('Verify Payment Error:', error);
-      reply.status(500).send({ error: 'Payment verification failed', details: error.message });
+      return reply.status(500).send({ error: 'Payment verification failed', details: error.message });
     }
   });
 
-  // -------------------------------------------------------------
-  // 11. POST /api/razorpay/validate-coupon
-  // -------------------------------------------------------------
-  app.post('/api/razorpay/validate-coupon', async (request, reply) => {
-    try {
-      const { code } = request.body;
-
-      if (!code) {
-        reply.status(400).send({ error: 'Coupon code is required' });
-        return;
-      }
-
-      const cleanCode = code.trim().toUpperCase();
-
-      const count = await prisma.coupon.count();
-      if (count === 0) {
-        try {
-          await prisma.coupon.createMany({
-            data: [
-              { code: 'WELCOME50', discountType: 'percentage', discountValue: 50, active: true },
-              { code: 'LOVE20', discountType: 'percentage', discountValue: 20, active: true },
-              { code: 'FREE100', discountType: 'percentage', discountValue: 100, active: true },
-              { code: 'BIODATA10', discountType: 'fixed', discountValue: 10, active: true },
-            ],
-          });
-        } catch (seedErr) {
-          console.error('Failed to seed default coupons:', seedErr);
-        }
-      }
-
-      const coupon = await prisma.coupon.findUnique({
-        where: { code: cleanCode },
-      });
-
-      if (!coupon) {
-        reply.status(404).send({ error: 'Invalid coupon code' });
-        return;
-      }
-
-      if (!coupon.active) {
-        reply.status(400).send({ error: 'This coupon is no longer active' });
-        return;
-      }
-
-      if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) {
-        reply.status(400).send({ error: 'This coupon has expired' });
-        return;
-      }
-
-      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
-        reply.status(400).send({ error: 'This coupon usage limit has been reached' });
-        return;
-      }
-
-      return {
-        success: true,
-        message: 'Coupon applied successfully',
-        coupon: {
-          code: coupon.code,
-          discountType: coupon.discountType,
-          discountValue: coupon.discountValue,
-        },
-      };
-    } catch (error) {
-      app.log.error('Coupon Validation Error:', error);
-      reply.status(500).send({ error: 'Failed to validate coupon', details: error.message });
-    }
-  });
-
-  // -------------------------------------------------------------
-  // 12. GET /api/razorpay/active-coupons
-  // -------------------------------------------------------------
-  app.get('/api/razorpay/active-coupons', async (request, reply) => {
-    try {
-      const cacheKey = 'active-coupons';
-      const data = await getCachedOrFetch(cacheKey, 300, async () => {
-        const coupons = await prisma.coupon.findMany({
-          where: {
-            active: true,
-            isPublic: true,
-            OR: [
-              { expiresAt: null },
-              { expiresAt: { gt: new Date() } },
-            ],
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-
-        const validCoupons = coupons.filter(
-          (c) => c.maxUses === null || c.usedCount < c.maxUses
-        );
-        return { success: true, coupons: validCoupons };
-      });
-      return data;
-    } catch (err) {
-      app.log.error('GET Active Coupons Error:', err);
-      reply.status(500).send({ error: 'Failed to fetch active coupons' });
-    }
-  });
-
-  // -------------------------------------------------------------
-  // 13. POST /api/razorpay/update-download-status
-  // -------------------------------------------------------------
+  // 5. POST /api/razorpay/update-download-status
   app.post('/api/razorpay/update-download-status', async (request, reply) => {
     try {
-      const { orderId, downloadStatus } = request.body;
+      const { orderId, downloadStatus } = request.body || {};
 
       if (!orderId || !downloadStatus) {
-        reply.status(400).send({ error: 'Missing required fields' });
-        return;
+        return reply.status(400).send({ error: 'Missing required fields' });
       }
 
       if (orderId === 'sandbox') {
-        return { success: true, message: 'Sandbox skipped' };
+        return reply.send({ success: true, message: 'Sandbox skipped' });
       }
 
       try {
@@ -419,15 +396,67 @@ export default async function routes(app, options) {
           data: { downloadStatus },
         });
       } catch (dbErr) {
-        console.warn('DB update of download status failed:', dbErr.message);
+        console.warn('DB update of download status failed (Prisma schema might be out of sync):', dbErr);
       }
 
-      return { success: true };
+      return reply.send({ success: true });
     } catch (err) {
       app.log.error('Failed to update download status API:', err);
-      return { success: false, error: 'Internal Server Error' };
+      return reply.status(200).send({ success: false, error: 'Internal Server Error' });
     }
   });
-
 }
 
+// Helper to create commission for paid order
+async function createCommissionForOrder(order, app) {
+  try {
+    if (!order.referralCode) return;
+    
+    // Find approved affiliate with this referral code
+    const affiliate = await prisma.affiliate.findFirst({
+      where: {
+        code: order.referralCode.trim().toUpperCase(),
+        status: 'approved'
+      }
+    });
+
+    if (!affiliate) {
+      app?.log?.warn(`[Commission] No approved affiliate found with code: ${order.referralCode}`);
+      return;
+    }
+
+    // Check if commission already exists for this order to prevent duplicates
+    const existing = await prisma.commission.findUnique({
+      where: { orderId: order.razorpayOrderId }
+    });
+
+    if (existing) {
+      app?.log?.info(`[Commission] Commission already exists for order: ${order.razorpayOrderId}`);
+      return;
+    }
+
+    // Calculate commission: 15% of order amount
+    const commissionPercent = 0.15; // 15% commission rate
+    const commissionAmount = parseFloat((order.amount * commissionPercent).toFixed(2));
+
+    if (commissionAmount <= 0) {
+      app?.log?.info(`[Commission] Commission amount is 0 or less for order: ${order.razorpayOrderId}`);
+      return;
+    }
+
+    // Create the Commission record
+    const commission = await prisma.commission.create({
+      data: {
+        affiliateId: affiliate.id,
+        orderId: order.razorpayOrderId,
+        orderAmount: order.amount,
+        commissionAmount,
+        status: 'pending', // Starts as pending review
+      }
+    });
+
+    app?.log?.info(`[Commission] Successfully created commission of ₹${commissionAmount} for affiliate ${affiliate.name} (Code: ${affiliate.code}) on order ${order.razorpayOrderId}`);
+  } catch (err) {
+    app?.log?.error('[Commission] Error creating commission for order:', err);
+  }
+}
