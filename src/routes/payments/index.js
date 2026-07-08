@@ -435,8 +435,14 @@ async function createCommissionForOrder(order, app) {
       return;
     }
 
-    // Calculate commission: 15% of order amount
-    const commissionPercent = 0.15; // 15% commission rate
+    // Calculate commission dynamically based on format and affiliate's rates
+    let rate = 30; // default normal rate
+    if (order.format === 'combo') {
+      rate = affiliate.comboCommissionRate != null ? affiliate.comboCommissionRate : 35;
+    } else {
+      rate = affiliate.commissionRate != null ? affiliate.commissionRate : 30;
+    }
+    const commissionPercent = rate / 100;
     const commissionAmount = parseFloat((order.amount * commissionPercent).toFixed(2));
 
     if (commissionAmount <= 0) {

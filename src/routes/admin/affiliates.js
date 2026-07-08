@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma.js';
+import { sendEmail } from '../../lib/email.js';
 
 export default async function adminAffiliateRoutes(fastify, options) {
   // 1. GET /api/admin/affiliates (which maps to /affiliates because of prefix /api/admin in parent register)
@@ -37,6 +38,22 @@ export default async function adminAffiliateRoutes(fastify, options) {
         where: { id },
         data: { status }
       });
+
+      // Send status update email
+      sendEmail({
+        to: updated.email,
+        subject: `Affiliate Account Status Update: ${status.toUpperCase()}`,
+        html: `
+          <div style="font-family:sans-serif;padding:20px;">
+            <h2>Account Status Updated</h2>
+            <p>Hi ${updated.name},</p>
+            <p>Your affiliate account status has been updated to: <strong>${status.toUpperCase()}</strong>.</p>
+            ${status === 'approved' ? '<p>You can now log in and access your dashboard to start earning commissions!</p>' : ''}
+            ${status === 'rejected' ? '<p>Unfortunately, your application does not meet our requirements at this time.</p>' : ''}
+            <p>Thank you,<br/>Biodata99 Team</p>
+          </div>
+        `
+      }).catch(err => fastify.log.error('Failed to send status email:', err));
 
       // If approved, verify/update commissions status if needed
       return reply.send({ success: true, affiliate: updated });
@@ -84,7 +101,8 @@ export default async function adminAffiliateRoutes(fastify, options) {
       }
 
       const withdrawal = await prisma.withdrawal.findUnique({
-        where: { id }
+        where: { id },
+        include: { affiliate: true }
       });
 
       if (!withdrawal) {
@@ -118,6 +136,22 @@ export default async function adminAffiliateRoutes(fastify, options) {
           })
         ]);
       }
+
+      // Send withdrawal email
+      sendEmail({
+        to: withdrawal.affiliate.email,
+        subject: `Withdrawal Request ${status.toUpperCase()}`,
+        html: `
+          <div style="font-family:sans-serif;padding:20px;">
+            <h2>Withdrawal Update</h2>
+            <p>Hi ${withdrawal.affiliate.name},</p>
+            <p>Your withdrawal request for ₹${withdrawal.amount} has been <strong>${status.toUpperCase()}</strong>.</p>
+            ${notes ? `<p><strong>Admin Notes:</strong> ${notes}</p>` : ''}
+            ${status === 'paid' ? '<p>The funds should be in your account shortly.</p>' : ''}
+            <p>Thank you,<br/>Biodata99 Team</p>
+          </div>
+        `
+      }).catch(err => fastify.log.error('Failed to send withdrawal email:', err));
 
       return reply.send({ success: true, message: `Withdrawal request ${status} successfully.` });
     } catch (error) {
@@ -184,6 +218,15 @@ export default async function adminAffiliateRoutes(fastify, options) {
         }
         data.commissionRate = rate;
       }
+      
+      const { comboCommissionRate } = request.body || {};
+      if (comboCommissionRate !== undefined) {
+        const comboRate = parseFloat(comboCommissionRate);
+        if (isNaN(comboRate) || comboRate < 0 || comboRate > 100) {
+          return reply.status(400).send({ error: 'Combo commission rate must be a valid number between 0 and 100.' });
+        }
+        data.comboCommissionRate = comboRate;
+      }
 
       const updated = await prisma.affiliate.update({ where: { id }, data });
       return reply.send({ success: true, affiliate: updated });
@@ -238,7 +281,8 @@ export default async function adminAffiliateRoutes(fastify, options) {
       }
 
       const commission = await prisma.commission.findUnique({
-        where: { id: commId }
+        where: { id: commId },
+        include: { affiliate: true }
       });
 
       if (!commission) {
@@ -256,6 +300,20 @@ export default async function adminAffiliateRoutes(fastify, options) {
         where: { id: commId },
         data
       });
+
+      // Send commission email
+      sendEmail({
+        to: commission.affiliate.email,
+        subject: `Commission Status Update: ${status.toUpperCase()}`,
+        html: `
+          <div style="font-family:sans-serif;padding:20px;">
+            <h2>Commission Update</h2>
+            <p>Hi ${commission.affiliate.name},</p>
+            <p>The status of a commission (₹${commission.commissionAmount}) has been updated to: <strong>${status.toUpperCase()}</strong>.</p>
+            <p>Thank you,<br/>Biodata99 Team</p>
+          </div>
+        `
+      }).catch(err => fastify.log.error('Failed to send commission email:', err));
 
       return reply.send({ success: true, commission: updated });
     } catch (error) {
@@ -284,12 +342,10 @@ export default async function adminAffiliateRoutes(fastify, options) {
       }
 
       const cleanNotes = (notes || 'Manual Bonus').trim();
-      const orderId = Date.now().toString();
 
       const newCommission = await prisma.commission.create({
         data: {
           affiliateId: id,
-          orderId,
           orderAmount: 0,
           commissionAmount,
           status: 'approved',
@@ -302,6 +358,30 @@ export default async function adminAffiliateRoutes(fastify, options) {
     } catch (error) {
       fastify.log.error('Admin Add Manual Commission Error:', error);
       return reply.status(500).send({ error: 'Failed to add manual commission.', details: error.message });
+    }
+  });
+
+  // 9. DELETE /api/admin/affiliates/commissions/:commId (deletes a commission)
+  fastify.delete('/affiliates/commissions/:commId', async (request, reply) => {
+    try {
+      const { commId } = request.params;
+
+      const commission = await prisma.commission.findUnique({
+        where: { id: commId }
+      });
+
+      if (!commission) {
+        return reply.status(404).send({ error: 'Commission record not found.' });
+      }
+
+      await prisma.commission.delete({
+        where: { id: commId }
+      });
+
+      return reply.send({ success: true, message: 'Commission deleted successfully.' });
+    } catch (error) {
+      fastify.log.error('Admin Delete Commission Error:', error);
+      return reply.status(500).send({ error: 'Failed to delete commission.', details: error.message });
     }
   });
 }

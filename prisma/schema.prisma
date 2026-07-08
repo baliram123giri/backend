@@ -230,7 +230,8 @@ model Affiliate {
   bankIfsc            String?
   totalClicks         Int               @default(0)
   uniqueVisitors      Int               @default(0)
-  commissionRate      Float             @default(10.0) // custom commission override (e.g. 10.0 for 10%)
+  commissionRate      Float             @default(30.0) // normal commission rate (e.g. 30.0 for 30%)
+  comboCommissionRate Float             @default(35.0) // commission rate for combo offers
   phone               String?
   tier                String?           @default("standard") // "standard", "gold", "platinum"
   adminNotes          String?           @db.Text

@@ -51,6 +51,11 @@ export default async function dashboardRoutes(app, options) {
           templates,
           recentDownloadsRaw,
           groupedPopularity,
+          totalAffiliates,
+          newAffiliatesToday,
+          pendingAffiliateRequests,
+          pendingWithdrawalRequests,
+          pendingCommissions,
           ...dailyTraffic
         ] = await Promise.all([
           prisma.user.count(),
@@ -62,6 +67,11 @@ export default async function dashboardRoutes(app, options) {
           prisma.template.findMany({ select: { id: true, name: true } }),
           prisma.downloadLog.findMany({ take: 5, orderBy: { createdAt: "desc" } }),
           prisma.downloadLog.groupBy({ by: ["templateId"], _count: { templateId: true } }),
+          prisma.affiliate.count(),
+          prisma.affiliate.count({ where: { createdAt: { gte: oneDayAgo } } }),
+          prisma.affiliate.count({ where: { status: 'pending' } }),
+          prisma.withdrawal.count({ where: { status: 'pending' } }),
+          prisma.commission.count({ where: { status: 'pending' } }),
           ...trafficPromises
         ]);
 
@@ -109,6 +119,11 @@ export default async function dashboardRoutes(app, options) {
           recentDownloads,
           templatePopularity,
           dailyTraffic,
+          totalAffiliates,
+          newAffiliatesToday,
+          pendingAffiliateRequests,
+          pendingWithdrawalRequests,
+          pendingCommissions,
         };
       });
 

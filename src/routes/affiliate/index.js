@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword, signSession, verifySession } from '../../lib/auth.js';
+import { sendEmail } from '../../lib/email.js';
 
 // Middleware to authenticate affiliate
 async function affiliateAuth(request, reply) {
@@ -110,6 +111,41 @@ export default async function affiliateRoutes(app, options) {
 
       // Sign session token
       const token = signSession({ affiliateId: affiliate.id, email: affiliate.email });
+
+      // Send Welcome Email to Affiliate
+      sendEmail({
+        to: affiliate.email,
+        subject: 'Welcome to Biodata99 Affiliate Program!',
+        html: `
+          <div style="font-family:'Inter',sans-serif;background-color:#fdf8f4;padding:30px;border-radius:12px;border:1px solid #C9A84C;max-width:600px;margin:0 auto;color:#333333;">
+            <h2 style="color:#C9A84C;margin-top:0;">Welcome to Biodata99, ${affiliate.name}!</h2>
+            <p style="font-size:16px;line-height:1.6;">Thank you for joining our affiliate program. Your application has been received and is currently under review by our team.</p>
+            <p style="font-size:16px;line-height:1.6;">Your unique affiliate code is: <strong style="font-size:18px;color:#d97706;background:#fef3c7;padding:4px 8px;border-radius:6px;">${affiliate.code}</strong></p>
+            <p style="font-size:16px;line-height:1.6;">We will notify you once your account is approved so you can start earning commissions.</p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:25px 0;" />
+            <p style="font-size:12px;color:#6b7280;">If you have any questions, feel free to reply to this email.</p>
+          </div>
+        `
+      }).catch(err => app.log.error('Failed to send welcome email:', err));
+
+      // Send Notification to Admin
+      sendEmail({
+        to: process.env.EMAIL_USER || 'support@biodata99.com',
+        subject: 'New Affiliate Registration Pending Approval',
+        html: `
+          <div style="font-family:sans-serif;padding:20px;">
+            <h2>New Affiliate Registration</h2>
+            <p>A new partner has signed up for the affiliate program and requires approval.</p>
+            <ul>
+              <li><strong>Name:</strong> ${affiliate.name}</li>
+              <li><strong>Email:</strong> ${affiliate.email}</li>
+              <li><strong>Promotion Channel:</strong> ${affiliate.channelType}</li>
+              <li><strong>Channel URL:</strong> ${affiliate.channelUrl || 'N/A'}</li>
+            </ul>
+            <p>Please log in to the admin dashboard to review and approve this application.</p>
+          </div>
+        `
+      }).catch(err => app.log.error('Failed to send admin notification email:', err));
 
       return {
         success: true,
@@ -342,7 +378,7 @@ export default async function affiliateRoutes(app, options) {
           paidCommission: parseFloat(paidCommission.toFixed(2)),
           referralLink: `https://biodata99.com?ref=${affiliate.code}`,
           referralCode: affiliate.code,
-          minWithdrawal: 500
+          minWithdrawal: 100
         },
         commissions: commissions.map(c => ({
           id: c.id,
@@ -417,9 +453,9 @@ export default async function affiliateRoutes(app, options) {
 
       const totalApprovedAmount = approvedCommissions.reduce((sum, c) => sum + c.commissionAmount, 0);
 
-      if (totalApprovedAmount < 500) {
+      if (totalApprovedAmount < 100) {
         return reply.status(400).send({ 
-          error: `Minimum withdrawal amount is ₹500. Your current approved commissions sum to ₹${totalApprovedAmount.toFixed(2)}.` 
+          error: `Minimum withdrawal amount is ₹100. Your current approved commissions sum to ₹${totalApprovedAmount.toFixed(2)}.` 
         });
       }
 
@@ -443,6 +479,22 @@ export default async function affiliateRoutes(app, options) {
           withdrawalId: withdrawal.id
         }
       });
+
+      // Notify Admin
+      sendEmail({
+        to: 'support@biodata99.com',
+        subject: `New Affiliate Payout Request - ₹${totalApprovedAmount.toFixed(2)}`,
+        html: `
+          <div style="font-family:sans-serif;padding:20px;">
+            <h2>New Payout Request</h2>
+            <p><strong>Affiliate:</strong> ${affiliate.name} (${affiliate.email})</p>
+            <p><strong>Amount:</strong> ₹${totalApprovedAmount.toFixed(2)}</p>
+            <p><strong>Method:</strong> ${paymentMethod}</p>
+            <p><strong>Details:</strong> ${paymentDetails}</p>
+            <p>Please log in to the admin panel to process this request.</p>
+          </div>
+        `
+      }).catch(err => app.log.error('Failed to send admin withdrawal email:', err));
 
       return {
         success: true,
@@ -511,46 +563,32 @@ export default async function affiliateRoutes(app, options) {
       const frontendUrl = process.env.FRONTEND_URL || 'https://biodata99.com';
       const resetUrl = `${frontendUrl}/affiliate/reset-password?token=${token}`;
 
-      // Send email via SMTP
-      const smtpPass = process.env.EMAIL_PASS;
-      if (!smtpPass) {
-        app.log.warn('EMAIL_PASS not set — skipping affiliate reset email');
-        return genericOk;
-      }
-
-      const nodemailer = (await import('nodemailer')).default;
-      const smtpHost = process.env.EMAIL_HOST || 'smtp.hostinger.com';
-      const smtpPort = parseInt(process.env.EMAIL_PORT || '465');
-      const smtpUser = process.env.EMAIL_USER || 'support@biodata99.com';
-
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpPort === 465,
-        auth: { user: smtpUser, pass: smtpPass },
-        tls: { rejectUnauthorized: false }
-      });
-
-      await transporter.sendMail({
-        from: `"Biodata99 Affiliate" <${smtpUser}>`,
+      // Send email via our central email utility
+      await sendEmail({
         to: affiliate.email,
         subject: 'Reset Your Affiliate Account Password',
         html: `
           <div style="font-family:'Inter',sans-serif;background-color:#fdf8f4;padding:30px;border-radius:12px;border:1px solid #C9A84C;max-width:600px;margin:0 auto;color:#333333;">
             <div style="text-align:center;margin-bottom:20px;">
-              <h1 style="color:#9B1B30;margin:0;font-size:26px;">biodata99.com</h1>
-              <p style="color:#C9A84C;margin:4px 0 0;font-size:12px;letter-spacing:1px;font-weight:bold;text-transform:uppercase;">Affiliate Partner Program</p>
+              <h2 style="color:#C9A84C;margin:0;font-size:24px;">Password Reset Request</h2>
             </div>
-            <p style="font-size:15px;line-height:1.7;">Hi <strong>${affiliate.name}</strong>,</p>
-            <p style="font-size:15px;line-height:1.7;">We received a request to reset your affiliate account password. Click the button below to set a new password. This link is valid for <strong>15 minutes</strong>.</p>
-            <div style="text-align:center;margin:30px 0;">
-              <a href="${resetUrl}" style="background-color:#9B1B30;color:#ffffff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold;display:inline-block;">
+            <p style="font-size:16px;line-height:1.6;margin-bottom:20px;">
+              Hi <strong>${affiliate.name}</strong>,<br/><br/>
+              We received a request to reset the password for your Biodata99 Affiliate account. 
+              Click the button below to choose a new password. This link is valid for <strong>15 minutes</strong>.
+            </p>
+            <div style="text-align:center;margin:35px 0;">
+              <a href="${resetUrl}" style="background-color:#C9A84C;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-size:16px;font-weight:bold;display:inline-block;box-shadow:0 4px 6px -1px rgba(201,168,76,0.4);">
                 Reset Password
               </a>
             </div>
-            <p style="font-size:13px;color:#888888;line-height:1.6;">If you did not request this, please ignore this email. Your password will remain unchanged.</p>
-            <p style="font-size:12px;color:#aaaaaa;text-align:center;margin-top:25px;border-top:1px solid #eeeeee;padding-top:15px;">
-              This is an automated email from biodata99.com. Please do not reply.
+            <p style="font-size:14px;color:#666666;line-height:1.5;">
+              If the button doesn't work, copy and paste this link into your browser:<br/>
+              <a href="${resetUrl}" style="color:#C9A84C;word-break:break-all;">${resetUrl}</a>
+            </p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:25px 0;" />
+            <p style="font-size:12px;color:#9ca3af;text-align:center;">
+              If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
             </p>
           </div>
         `

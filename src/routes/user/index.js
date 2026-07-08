@@ -260,6 +260,11 @@ app.post('/api/feedback', {
             errorMsg: errorMsg || null,
           },
         });
+
+        // Invalidate dashboard stats cache
+        if (redis && redis.status === 'ready') {
+          await redis.del('admin:dashboard-stats');
+        }
       }
 
       if (resolvedOrderId && resolvedOrderId !== 'sandbox' && resolvedOrderId !== 'dev_bypass') {
