@@ -107,7 +107,7 @@ export default async function adminCouponsRoutes(app, options) {
   });
 
   // DELETE coupons (accepts body with either id or array of ids)
-  app.post('/coupons/delete', async (request, reply) => {
+  const deleteHandler = async (request, reply) => {
     try {
       const { id, ids } = request.body;
       const targetIds = ids || (id ? [id] : null);
@@ -133,5 +133,8 @@ export default async function adminCouponsRoutes(app, options) {
       app.log.error('Delete Coupon Error:', error);
       return reply.status(500).send({ error: 'Failed to delete coupons' });
     }
-  });
+  };
+
+  app.delete('/coupons', deleteHandler);
+  app.post('/coupons/delete', deleteHandler);
 }
