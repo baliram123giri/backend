@@ -185,7 +185,7 @@ export const translations = {
     "religion": "Religion",
     "caste": "Caste",
     "gotra": "Gotra",
-    "kuldaivat": "Family Deity (Kuldaivat)",
+    "kuldaivat": "Family Deity",
     "manglik": "Manglik",
     "education": "Highest Education",
     "college": "College/University",
@@ -3402,7 +3402,7 @@ const communityKeys = {
     "Anglican": "Anglican",
     "Methodist": "Methodist",
     "Baptist": "Baptist",
-    "caste": "Caste/Sub-Caste"
+    "caste": "Caste"
   },
   "हिंदी": {
     "sect": "पंथ / फ़िर्का",
