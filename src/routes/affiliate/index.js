@@ -34,7 +34,13 @@ async function affiliateAuth(request, reply) {
 }
 
 export default async function affiliateRoutes(app, options) {
-  
+  // Ensure affiliate API endpoints are never cached by CDNs, browsers, or proxies
+  app.addHook('onSend', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
+  });
+
   // -------------------------------------------------------------
   // 1. POST /api/affiliate/signup
   // -------------------------------------------------------------
