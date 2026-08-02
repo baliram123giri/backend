@@ -54,7 +54,6 @@ export default async function affiliateRoutes(app, options) {
           email: { type: 'string', format: 'email' },
           password: { type: 'string', minLength: 6 },
           channelType: { type: 'string' },
-          channelUrl: { type: 'string' },
           upiId: { type: 'string' },
           bankAccountName: { type: 'string' },
           bankAccountNumber: { type: 'string' },
@@ -65,7 +64,7 @@ export default async function affiliateRoutes(app, options) {
   }, async (request, reply) => {
     try {
       const { 
-        name, email, password, channelType, channelUrl, 
+        name, email, password, channelType, 
         upiId, bankAccountName, bankAccountNumber, bankIfsc 
       } = request.body;
 
@@ -106,7 +105,6 @@ export default async function affiliateRoutes(app, options) {
           password: hashedPassword,
           code,
           channelType,
-          channelUrl,
           upiId,
           bankAccountName,
           bankAccountNumber,
@@ -146,7 +144,6 @@ export default async function affiliateRoutes(app, options) {
               <li><strong>Name:</strong> ${affiliate.name}</li>
               <li><strong>Email:</strong> ${affiliate.email}</li>
               <li><strong>Promotion Channel:</strong> ${affiliate.channelType}</li>
-              <li><strong>Channel URL:</strong> ${affiliate.channelUrl || 'N/A'}</li>
             </ul>
             <p>Please log in to the admin dashboard to review and approve this application.</p>
           </div>
@@ -242,7 +239,6 @@ export default async function affiliateRoutes(app, options) {
         status: aff.status,
         adminNotes: aff.adminNotes,
         channelType: aff.channelType,
-        channelUrl: aff.channelUrl,
         upiId: aff.upiId,
         bankAccountName: aff.bankAccountName,
         bankAccountNumber: aff.bankAccountNumber,

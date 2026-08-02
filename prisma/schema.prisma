@@ -223,7 +223,6 @@ model Affiliate {
   status              String            @default("pending") // "pending", "approved", "rejected", "suspended"
   code                String            @unique // unique referral code like BG1025
   channelType         String?           // e.g. "Bloggers", "YouTubers", etc.
-  channelUrl          String?
   upiId               String?
   bankAccountName     String?
   bankAccountNumber   String?
