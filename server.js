@@ -29,11 +29,20 @@ const app = fastify({
 await app.register(fastifyCors, {
   origin: true,
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'x-admin-key', 'x-affiliate-token', 'Access-Control-Request-Private-Network'],
 });
 
-// Set X-Robots-Tag header on all API responses to prevent indexing
+// Set headers on all API responses
 app.addHook('onRequest', async (request, reply) => {
   reply.header('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+});
+
+app.addHook('onSend', async (request, reply, payload) => {
+  if (request.headers['access-control-request-private-network']) {
+    reply.header('Access-Control-Allow-Private-Network', 'true');
+  }
+  return payload;
 });
 
 // Serve robots.txt to disallow all crawlers

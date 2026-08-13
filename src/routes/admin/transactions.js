@@ -61,6 +61,13 @@ export default async function adminTransactionsRoutes(app, options) {
             orderBy: { createdAt: 'desc' },
             skip,
             take: limitNum,
+            include: {
+              downloadLogs: {
+                take: 1,
+                orderBy: { createdAt: 'desc' },
+                select: { location: true, name: true }
+              }
+            }
           }),
           prisma.order.count({ where }),
           prisma.template.findMany({
@@ -77,14 +84,19 @@ export default async function adminTransactionsRoutes(app, options) {
 
         const orders = ordersRaw.map((order) => {
           const template = templates.find((t) => t.id === order.templateId);
+          const dlLocation = order.downloadLogs?.[0]?.location;
+          const dlName = order.downloadLogs?.[0]?.name;
           return {
             ...order,
+            amount: Number((order.amount || 0).toFixed(2)),
+            location: dlLocation || null,
+            biodataName: dlName || order.customerName,
             templateName: template ? template.name : "Premium Theme",
             downloadStatus: order.downloadStatus || null,
           };
         });
 
-        const totalRevenue = allPaidOrders._sum.amount || 0;
+        const totalRevenue = Number((allPaidOrders._sum.amount || 0).toFixed(2));
         const paidCount = allPaidOrders._count.id;
         const successRate = totalTransactions > 0 ? Math.round((paidCount / totalTransactions) * 100) : 100;
 
@@ -198,6 +210,17 @@ export default async function adminTransactionsRoutes(app, options) {
       }
 
       if (orderIds && Array.isArray(orderIds)) {
+        const targetOrders = await prisma.order.findMany({
+          where: { id: { in: orderIds } },
+          select: { razorpayOrderId: true },
+        });
+        const rzIds = targetOrders.map(o => o.razorpayOrderId).filter(Boolean);
+        if (rzIds.length > 0) {
+          await prisma.downloadLog.deleteMany({
+            where: { orderId: { in: rzIds } },
+          });
+        }
+
         const deleted = await prisma.order.deleteMany({
           where: { id: { in: orderIds } },
         });
@@ -205,6 +228,16 @@ export default async function adminTransactionsRoutes(app, options) {
         return reply.send({
           success: true,
           message: `Successfully deleted ${deleted.count} transaction records`,
+        });
+      }
+
+      const targetOrder = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { razorpayOrderId: true },
+      });
+      if (targetOrder?.razorpayOrderId) {
+        await prisma.downloadLog.deleteMany({
+          where: { orderId: targetOrder.razorpayOrderId },
         });
       }
 
