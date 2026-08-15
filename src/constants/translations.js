@@ -3427,7 +3427,7 @@ const communityKeys = {
     "Anglican": "एंग्लिकन",
     "Methodist": "मेथोडिस्ट",
     "Baptist": "बैपटिस्ट",
-    "caste": "जाति / उप-जाति"
+    "caste": "जाति"
   },
   "मराठी": {
     "sect": "पंथ",
@@ -3452,7 +3452,7 @@ const communityKeys = {
     "Anglican": "अँग्लिकन",
     "Methodist": "मेथोडिस्ट",
     "Baptist": "बॅप्टिस्ट",
-    "caste": "जात / पोट-जात"
+    "caste": "जात"
   },
   "ગુજરાતી": {
     "sect": "ફિરકો / પંથ",
@@ -3477,7 +3477,7 @@ const communityKeys = {
     "Anglican": "એંગ્લિકન",
     "Methodist": "મેથોડિસ્ટ",
     "Baptist": "બેપ્ટિસ્ટ",
-    "caste": "જ્ઞાતિ / પેટા જ્ઞાતિ"
+    "caste": "જ્ઞાતિ"
   },
   "বাংলা": {
     "sect": "সম্প্রদায় / ফিরকা",
@@ -3502,7 +3502,7 @@ const communityKeys = {
     "Anglican": "অ্যাংলিকান",
     "Methodist": "মেথডিস্ট",
     "Baptist": "ব্যাপ্টিস্ট",
-    "caste": "জাতি / উপজাতি"
+    "caste": "জাতি"
   },
   "தமிழ்": {
     "sect": "பிரிவு",
@@ -3527,7 +3527,7 @@ const communityKeys = {
     "Anglican": "ஆங்கிலிகன்",
     "Methodist": "மெதடிஸ்ட்",
     "Baptist": "பாப்டிஸ்ட்",
-    "caste": "சாதி / உட்பிரிவு"
+    "caste": "சாதி"
   },
   "తెలుగు": {
     "sect": "శాఖ / తెగ",
@@ -3552,7 +3552,7 @@ const communityKeys = {
     "Anglican": "ఆంగ్లికన్",
     "Methodist": "మెథడిస్ట్",
     "Baptist": "బాప్టిస్ట్",
-    "caste": "కులం / ఉపకులం"
+    "caste": "కులం"
   },
   "ಕನ್ನಡ": {
     "sect": "ಪಂಥ",
@@ -3577,7 +3577,7 @@ const communityKeys = {
     "Anglican": "ಆಂಗ್ಲಿಕನ್",
     "Methodist": "ಮೆಥೋಡಿಸ್ಟ್",
     "Baptist": "ಬ್ಯಾಪ್ಟಿಸ್ಟ್",
-    "caste": "ಜಾತಿ / ಉಪಜಾತಿ"
+    "caste": "ಜಾತಿ"
   },
   "ਪੰਜਾਬੀ": {
     "sect": "ਫਿਰਕਾ / ਪੰਥ",
@@ -3602,7 +3602,7 @@ const communityKeys = {
     "Anglican": "ਐਂਗਲੀਕਨ",
     "Methodist": "ਮੈਥੋਡਿਸਟ",
     "Baptist": "ਬੈਪਟিস্ট",
-    "caste": "ਜਾਤ / ਉਪ-ਜਾਤ"
+    "caste": "ਜਾਤ"
   },
   "اردو": {
     "sect": "فرقہ",
@@ -3627,7 +3627,7 @@ const communityKeys = {
     "Anglican": "اینگلیکن",
     "Methodist": "میتھوڈسٹ",
     "Baptist": "بائپٹسٹ",
-    "caste": "ذات / برادری"
+    "caste": "ذات"
   }
 };
 
