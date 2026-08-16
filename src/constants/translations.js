@@ -81,6 +81,7 @@ export function translateDynamicOption(opt, t, fieldId) {
 
 export const translations = {
   "English": {
+    "General": "General",
     "Software Engineer": "Software Engineer",
     "Doctor": "Doctor",
     "Teacher / Professor": "Teacher / Professor",
@@ -254,6 +255,7 @@ export const translations = {
     "yesReset": "Yes, Reset"
   },
   "हिंदी": {
+    "General": "सामान्य",
     "Software Engineer": "सॉफ्टवेयर इंजीनियर",
     "Doctor": "डॉक्टर",
     "Teacher / Professor": "शिक्षक / प्रोफेसर",
@@ -428,6 +430,7 @@ export const translations = {
     "yesReset": "हां, रीसेट करें"
   },
   "मराठी": {
+    "General": "सर्वसाधारण",
     "Software Engineer": "सॉफ्टवेअर इंजिनिअर",
     "Doctor": "डॉक्टर",
     "Teacher / Professor": "शिक्षक / प्राध्यापक",
@@ -602,6 +605,8 @@ export const translations = {
     "AM": "AM"
   },
   "ગુજરાતી": {
+    "General": "સામાન્ય",
+    "Sikh": "શીખ",
     "Software Engineer": "સોફ્ટવેર એન્જિનિયર",
     "Doctor": "ડોક્ટર",
     "Teacher / Professor": "શિક્ષક / પ્રોફેસર",
@@ -776,6 +781,7 @@ export const translations = {
     "yesReset": "હા, રીસેટ કરો"
   },
   "বাংলা": {
+    "General": "সাধারণ",
     "Software Engineer": "সফটওয়্যার ইঞ্জিনিয়ার",
     "Doctor": "ডাক্তার",
     "Teacher / Professor": "শিক্ষক / অধ্যাপক",
@@ -950,6 +956,8 @@ export const translations = {
     "yesReset": "হ্যাঁ, রিসেট করুন"
   },
   "தமிழ்": {
+    "General": "பொது",
+    "Jain": "சைனர்",
     "Software Engineer": "மென்பொருள் பொறியாளர்",
     "Doctor": "மருத்துவர்",
     "Teacher / Professor": "ஆசிரியர் / பேராசிரியர்",
@@ -1124,6 +1132,9 @@ export const translations = {
     "yesReset": "ஆம், மீட்டமை"
   },
   "తెలుగు": {
+    "General": "సాధారణ",
+    "Jain": "జైన",
+    "Christian": "క్రైస్తవ",
     "Software Engineer": "సాఫ్ట్‌వేర్ ఇంజనీర్",
     "Doctor": "డాక్టర్",
     "Teacher / Professor": "ఉపాధ్యాయుడు / ప్రొఫెసర్",
@@ -1298,6 +1309,8 @@ export const translations = {
     "yesReset": "అవును, రీసెట్ చేయి"
   },
   "ಕನ್ನಡ": {
+    "General": "ಸಾಮಾನ್ಯ",
+    "Jain": "ಜೈನ",
     "Software Engineer": "ಸಾಫ್ಟ್ ವೇರ್ ಇಂಜಿನಿಯರ್",
     "Doctor": "ವೈದ್ಯ",
     "Teacher / Professor": "ಶಿಕ್ಷಕ / ಪ್ರಾಧ್ಯಾಪಕ",
@@ -1472,6 +1485,7 @@ export const translations = {
     "yesReset": "ಹೌದು, ರೀಸೆಟ್ ಮಾಡು"
   },
   "ਪੰਜਾਬੀ": {
+    "General": "ਆਮ",
     "Software Engineer": "ਸਾਫਟਵੇਅਰ ਇੰਜੀਨੀਅਰ",
     "Doctor": "ਡਾਕਟਰ",
     "Teacher / Professor": "ਅਧਿਆਪਕ / ਪ੍ਰੋਫੈਸਰ",
@@ -1646,6 +1660,7 @@ export const translations = {
     "yesReset": "ਹਾਂ, ਰੀਸੈਟ ਕਰੋ"
   },
   "اردو": {
+    "General": "عام",
     "Software Engineer": "سافٹ ویئر انجینئر",
     "Doctor": "ڈاکٹر",
     "Teacher / Professor": "استاد / پروفیسر",
@@ -3380,6 +3395,16 @@ export function translateUI(key, lang) {
 
 const communityKeys = {
   "English": {
+    "Other": "Other",
+    "General": "General",
+    "Parsi": "Parsi",
+    "Buddhist": "Buddhist",
+    "Jain": "Jain",
+    "Christian": "Christian",
+    "Sikh": "Sikh",
+    "Muslim": "Muslim",
+    "Hindu": "Hindu",
+    "religion": "Religion",
     "sect": "Sect",
     "namaz": "Namaz / Prayer",
     "Sunni": "Sunni",
@@ -3405,6 +3430,16 @@ const communityKeys = {
     "caste": "Caste"
   },
   "हिंदी": {
+    "Other": "अन्य",
+    "General": "सामान्य",
+    "Parsi": "पारसी",
+    "Buddhist": "बौद्ध",
+    "Jain": "जैन",
+    "Christian": "ईसाई",
+    "Sikh": "सिख",
+    "Muslim": "मुस्लिम",
+    "Hindu": "हिंदू",
+    "religion": "धर्म",
     "sect": "पंथ / फ़िर्का",
     "namaz": "नमाज़ / प्रार्थना",
     "Sunni": "सुन्नी",
@@ -3430,6 +3465,16 @@ const communityKeys = {
     "caste": "जाति"
   },
   "मराठी": {
+    "Other": "इतर",
+    "General": "सर्वसाधारण",
+    "Parsi": "पारशी",
+    "Buddhist": "बौद्ध",
+    "Jain": "जैन",
+    "Christian": "ख्रिश्चन",
+    "Sikh": "शीख",
+    "Muslim": "मुस्लिम",
+    "Hindu": "हिंदू",
+    "religion": "धर्म",
     "sect": "पंथ",
     "namaz": "नमाज / प्रार्थना",
     "Sunni": "सुन्नी",
@@ -3455,6 +3500,16 @@ const communityKeys = {
     "caste": "जात"
   },
   "ગુજરાતી": {
+    "Other": "અન્ય",
+    "General": "સામાન્ય",
+    "Parsi": "પારસી",
+    "Buddhist": "બૌદ્ધ",
+    "Jain": "જૈન",
+    "Christian": "ખ્રિસ્તી",
+    "Sikh": "શીખ",
+    "Muslim": "મુસ્લિમ",
+    "Hindu": "હિન્દુ",
+    "religion": "ધર્મ",
     "sect": "ફિરકો / પંથ",
     "namaz": "નમાઝ / પ્રાર્થના",
     "Sunni": "સુન્ની",
@@ -3480,6 +3535,16 @@ const communityKeys = {
     "caste": "જ્ઞાતિ"
   },
   "বাংলা": {
+    "Other": "অন্যান্য",
+    "General": "সাধারণ",
+    "Parsi": "পার্সি",
+    "Buddhist": "বৌদ্ধ",
+    "Jain": "জৈন",
+    "Christian": "খ্রিস্টান",
+    "Sikh": "শিখ",
+    "Muslim": "মুসলিম",
+    "Hindu": "হিন্দু",
+    "religion": "ধর্ম",
     "sect": "সম্প্রদায় / ফিরকা",
     "namaz": "নামাজ / প্রার্থনা",
     "Sunni": "সুন্নি",
@@ -3505,6 +3570,16 @@ const communityKeys = {
     "caste": "জাতি"
   },
   "தமிழ்": {
+    "Other": "மற்றவை",
+    "General": "பொது",
+    "Parsi": "பார்சி",
+    "Buddhist": "பௌத்தர்",
+    "Jain": "சைனர்",
+    "Christian": "கிறிஸ்தவர்",
+    "Sikh": "சீக்கியர்",
+    "Muslim": "முஸ்லிம்",
+    "Hindu": "இந்து",
+    "religion": "மதம்",
     "sect": "பிரிவு",
     "namaz": "தொழுகை / பிரார்த்தனை",
     "Sunni": "சுன்னி",
@@ -3530,6 +3605,16 @@ const communityKeys = {
     "caste": "சாதி"
   },
   "తెలుగు": {
+    "Other": "ఇతర",
+    "General": "సాధారణ",
+    "Parsi": "పార్సీ",
+    "Buddhist": "బౌద్ధ",
+    "Jain": "జైన",
+    "Christian": "క్రైస్తవ",
+    "Sikh": "సిక్కు",
+    "Muslim": "ముస్లిం",
+    "Hindu": "హిందూ",
+    "religion": "మతం",
     "sect": "శాఖ / తెగ",
     "namaz": "నమాజ్ / ప్రార్థన",
     "Sunni": "సున్ని",
@@ -3555,6 +3640,16 @@ const communityKeys = {
     "caste": "కులం"
   },
   "ಕನ್ನಡ": {
+    "Other": "ಇತರ",
+    "General": "ಸಾಮಾನ್ಯ",
+    "Parsi": "ಪಾರ್ಸಿ",
+    "Buddhist": "ಬೌದ್ಧ",
+    "Jain": "ಜೈನ",
+    "Christian": "ಕ್ರಿಶ್ಚಿಯನ್",
+    "Sikh": "ಸಿಖ್",
+    "Muslim": "ಮುಸ್ಲಿಂ",
+    "Hindu": "ಹಿಂದೂ",
+    "religion": "ಧರ್ಮ",
     "sect": "ಪಂಥ",
     "namaz": "ನಮಾಜ್ / ಪ್ರಾರ್ಥನೆ",
     "Sunni": "ಸುನ್ನಿ",
@@ -3580,6 +3675,16 @@ const communityKeys = {
     "caste": "ಜಾತಿ"
   },
   "ਪੰਜਾਬੀ": {
+    "Other": "ਹੋਰ",
+    "General": "ਆਮ",
+    "Parsi": "ਪਾਰਸੀ",
+    "Buddhist": "ਬੋਧੀ",
+    "Jain": "ਜੈਨ",
+    "Christian": "ਈਸਾਈ",
+    "Sikh": "ਸਿੱਖ",
+    "Muslim": "ਮੁਸਲਿਮ",
+    "Hindu": "ਹਿੰਦੂ",
+    "religion": "ਧਰਮ",
     "sect": "ਫਿਰਕਾ / ਪੰਥ",
     "namaz": "ਨਮਾਜ਼ / ਪ੍ਰਾਰਥਨਾ",
     "Sunni": "ਸੁੰਨੀ",
@@ -3605,6 +3710,16 @@ const communityKeys = {
     "caste": "ਜਾਤ"
   },
   "اردو": {
+    "Other": "دیگر",
+    "General": "عام",
+    "Parsi": "پارسی",
+    "Buddhist": "بودھ",
+    "Jain": "جین",
+    "Christian": "عیسائی",
+    "Sikh": "سکھ",
+    "Muslim": "مسلم",
+    "Hindu": "ہندو",
+    "religion": "مذہب",
     "sect": "فرقہ",
     "namaz": "نماز / دعا",
     "Sunni": "سنی",
