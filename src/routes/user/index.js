@@ -194,18 +194,16 @@ app.post('/api/feedback', {
 // -------------------------------------------------------------
   app.post('/api/download-log', async (request, reply) => {
     try {
-      const { name, location, format, templateId, orderId, status, errorMsg } = request.body;
+      const { name, location, format, templateId, orderId, isFree, status, errorMsg } = request.body || {};
 
-      if (!name || !format) {
-        reply.status(400).send({ error: 'Name and format are required fields' });
-        return;
-      }
+      const resolvedName = name || 'Matrimonial Biodata';
+      const resolvedFormat = (format || 'pdf').toUpperCase();
 
-      // Resolve orderId if null or missing
-      let resolvedOrderId = orderId;
-      if (!resolvedOrderId && name && templateId) {
+      // Resolve orderId only if not explicitly a free download
+      let resolvedOrderId = orderId || null;
+      if (!isFree && !resolvedOrderId && name && templateId) {
         try {
-          let matchingOrder = await prisma.order.findFirst({
+          const matchingOrder = await prisma.order.findFirst({
             where: {
               customerName: name,
               templateId: templateId,
@@ -215,17 +213,6 @@ app.post('/api/feedback', {
               createdAt: 'desc',
             },
           });
-          if (!matchingOrder) {
-            matchingOrder = await prisma.order.findFirst({
-              where: {
-                customerName: name,
-                templateId: templateId,
-              },
-              orderBy: {
-                createdAt: 'desc',
-              },
-            });
-          }
           if (matchingOrder) {
             resolvedOrderId = matchingOrder.razorpayOrderId;
           }
@@ -239,40 +226,32 @@ app.post('/api/feedback', {
         request.headers['x-real-ip'] ||
         request.ip ||
         null;
-      const userAgent = request.headers['user-agent'];
+      const userAgent = request.headers['user-agent'] || null;
 
-      const isDev = process.env.NEXT_PUBLIC_IS_DEV === 'true';
-      let log = null;
-
-      if (isDev) {
-        console.log('Dev mode active: skipping download logs insertion to DB.');
-        log = {
-          id: 'dev-mock-log-id',
-          name,
+      // Always create persistent download log in database (both Free and Paid)
+      const log = await prisma.downloadLog.create({
+        data: {
+          name: resolvedName,
           location: location || null,
-          format,
+          format: resolvedFormat,
           templateId: templateId || null,
           ipAddress,
           userAgent,
-          createdAt: new Date(),
-        };
-      } else {
-        log = await prisma.downloadLog.create({
-          data: {
-            name,
-            location: location || null,
-            format,
-            templateId: templateId || null,
-            ipAddress,
-            userAgent,
-            orderId: resolvedOrderId || null,
-            errorMsg: errorMsg || null,
-          },
-        });
+          orderId: isFree ? null : (resolvedOrderId || null),
+          errorMsg: errorMsg || null,
+        },
+      });
 
-        // Invalidate dashboard stats cache
-        if (redis && redis.status === 'ready') {
+      // Invalidate dashboard stats & transaction caches
+      if (redis && redis.status === 'ready') {
+        try {
           await redis.del('admin:dashboard-stats');
+          const txKeys = await redis.keys('transactions:*');
+          if (txKeys.length > 0) {
+            await redis.del(txKeys);
+          }
+        } catch (cacheErr) {
+          console.warn('Redis cache invalidation error on download log:', cacheErr.message);
         }
       }
 
@@ -292,7 +271,7 @@ app.post('/api/feedback', {
       app.log.error('Download log error:', error);
       reply.status(500).send({ error: 'Failed to record download', details: error.message });
     }
-});
+  });
 
 // -------------------------------------------------------------
 // 8. POST /api/contact
