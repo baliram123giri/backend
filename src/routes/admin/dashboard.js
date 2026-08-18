@@ -32,6 +32,18 @@ export default async function dashboardRoutes(app, options) {
           pendingWithdrawalRequests,
           pendingCommissions,
           pastWeekOrders,
+          feedbackCount,
+          feedbackCountToday,
+          feedbackCountThisWeek,
+          feedbackAvg,
+          feedbackRatingGroup,
+          recentFeedbackList,
+          reviewSettings,
+          totalFreeDownloads,
+          freeDownloadsToday,
+          freeDownloadsThisWeek,
+          pastWeekFreeDownloads,
+          recentDownloadLogsRaw,
         ] = await Promise.all([
           prisma.user.count(),
           prisma.user.count({ where: { createdAt: { gte: oneDayAgo } } }),
@@ -41,7 +53,7 @@ export default async function dashboardRoutes(app, options) {
           prisma.order.aggregate({ where: { status: "paid", createdAt: { gte: oneDayAgo } }, _sum: { amount: true } }),
           prisma.template.findMany({ select: { id: true, name: true } }),
           prisma.order.findMany({
-            take: 5,
+            take: 10,
             orderBy: { createdAt: "desc" },
             include: {
               downloadLogs: {
@@ -61,12 +73,38 @@ export default async function dashboardRoutes(app, options) {
             where: { status: "paid", createdAt: { gte: sevenDaysAgo } },
             select: { createdAt: true }
           }),
+          prisma.feedback.count(),
+          prisma.feedback.count({ where: { createdAt: { gte: oneDayAgo } } }),
+          prisma.feedback.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
+          prisma.feedback.aggregate({ _avg: { rating: true } }),
+          prisma.feedback.groupBy({ by: ["rating"], _count: { rating: true } }),
+          prisma.feedback.findMany({
+            take: 6,
+            orderBy: { createdAt: "desc" }
+          }),
+          prisma.reviewSettings.findUnique({ where: { id: "global" } }),
+          prisma.downloadLog.count({ where: { orderId: null } }),
+          prisma.downloadLog.count({ where: { orderId: null, createdAt: { gte: oneDayAgo } } }),
+          prisma.downloadLog.count({ where: { orderId: null, createdAt: { gte: sevenDaysAgo } } }),
+          prisma.downloadLog.findMany({
+            where: { orderId: null, createdAt: { gte: sevenDaysAgo } },
+            select: { createdAt: true }
+          }),
+          prisma.downloadLog.findMany({
+            take: 10,
+            orderBy: { createdAt: "desc" },
+            include: {
+              order: true
+            }
+          })
         ]);
 
-        const totalDownloads = totalPaidOrders;
-        const downloadsThisWeek = paidOrdersThisWeek;
+        const totalPaidDownloads = totalPaidOrders;
+        const totalDownloads = totalPaidOrders + totalFreeDownloads;
+        const downloadsThisWeek = paidOrdersThisWeek + freeDownloadsThisWeek;
+        const downloadsToday = (paidOrdersToday._sum.amount ? 1 : 0) + freeDownloadsToday;
 
-        // Calculate 7-day traffic in memory efficiently
+        // Calculate 7-day traffic in memory efficiently (combining paid and free generated documents)
         const dailyTraffic = [];
         for (let i = 6; i >= 0; i--) {
           const startOfDay = new Date();
@@ -78,24 +116,31 @@ export default async function dashboardRoutes(app, options) {
           endOfDay.setDate(endOfDay.getDate() - i);
 
           const dayLabel = startOfDay.toLocaleDateString(undefined, { weekday: "short" });
-          const count = pastWeekOrders.filter(order => {
+          const orderCount = pastWeekOrders.filter(order => {
             const time = new Date(order.createdAt).getTime();
             return time >= startOfDay.getTime() && time <= endOfDay.getTime();
           }).length;
 
-          dailyTraffic.push({ day: dayLabel, count });
+          const freeCount = pastWeekFreeDownloads.filter(dl => {
+            const time = new Date(dl.createdAt).getTime();
+            return time >= startOfDay.getTime() && time <= endOfDay.getTime();
+          }).length;
+
+          dailyTraffic.push({ day: dayLabel, count: orderCount + freeCount });
         }
 
         const totalRevenue = Number((paidOrders._sum.amount || 0).toFixed(2));
         const revenueToday = Number((paidOrdersToday._sum.amount || 0).toFixed(2));
 
-        const recentTransactions = recentOrdersRaw.map(order => {
+        // Format recent paid orders
+        const formattedOrders = recentOrdersRaw.map(order => {
           const template = templates.find(t => t.id === order.templateId);
           const dlLocation = order.downloadLogs?.[0]?.location;
           const dlName = order.downloadLogs?.[0]?.name;
 
           return {
             id: order.id,
+            orderId: order.razorpayOrderId,
             name: order.customerName || dlName || "Matrimonial Biodata",
             location: dlLocation || order.customerPhone || order.customerEmail || "Direct Checkout",
             biodataLocation: dlLocation || null,
@@ -105,7 +150,9 @@ export default async function dashboardRoutes(app, options) {
             format: (order.format || 'PDF').toUpperCase(),
             amount: Number((order.amount || 0).toFixed(2)),
             currency: order.currency || "INR",
-            status: order.status || "paid",
+            isFree: false,
+            paymentType: "PAID",
+            status: (order.status || "PAID").toUpperCase(),
             downloadStatus: order.downloadStatus || "pending",
             templateId: order.templateId,
             templateName: template ? template.name : "Premium Theme",
@@ -113,6 +160,39 @@ export default async function dashboardRoutes(app, options) {
             createdAt: order.createdAt,
           };
         });
+
+        // Format recent free downloads (exclude logs that are already tied to paid orders to avoid duplication)
+        const formattedFreeLogs = recentDownloadLogsRaw
+          .filter(log => !log.order || log.order.status !== 'paid')
+          .map(log => {
+            const template = templates.find(t => t.id === log.templateId);
+            return {
+              id: log.id,
+              orderId: null,
+              name: log.name || "Matrimonial Biodata",
+              location: log.location || "Direct Download",
+              biodataLocation: log.location || null,
+              customerName: log.name,
+              customerEmail: null,
+              customerPhone: null,
+              format: (log.format || 'PDF').toUpperCase(),
+              amount: 0,
+              currency: "INR",
+              isFree: true,
+              paymentType: "FREE",
+              status: "FREE",
+              downloadStatus: log.errorMsg ? "failed" : "success",
+              templateId: log.templateId,
+              templateName: template ? template.name : "Standard Theme",
+              razorpayOrderId: null,
+              createdAt: log.createdAt,
+            };
+          });
+
+        // Combine and sort by createdAt desc
+        const recentTransactions = [...formattedOrders, ...formattedFreeLogs]
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 10);
 
         // Template popularity mapping
         let templatePopularity = groupedPopularity.map((item) => {
@@ -137,11 +217,67 @@ export default async function dashboardRoutes(app, options) {
           ];
         }
 
+        // Review and satisfaction statistics
+        const totalReviews = feedbackCount;
+        const reviewsThisWeek = feedbackCountThisWeek;
+        const reviewsToday = feedbackCountToday;
+        const averageRating = feedbackAvg._avg?.rating ? Number(feedbackAvg._avg.rating.toFixed(1)) : 5.0;
+
+        const ratingCounts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+        feedbackRatingGroup.forEach(g => {
+          if (ratingCounts[g.rating] !== undefined) {
+            ratingCounts[g.rating] = g._count.rating;
+          }
+        });
+
+        const positiveCount = (ratingCounts[5] || 0) + (ratingCounts[4] || 0);
+        const criticalReviewsCount = (ratingCounts[1] || 0) + (ratingCounts[2] || 0);
+        const positivePercentage = totalReviews > 0 ? Math.round((positiveCount / totalReviews) * 100) : 100;
+
+        const distribution = [5, 4, 3, 2, 1].map(stars => ({
+          stars,
+          count: ratingCounts[stars] || 0,
+          percentage: totalReviews > 0 ? Number((( (ratingCounts[stars] || 0) / totalReviews) * 100).toFixed(1)) : 0,
+        }));
+
+        const reviewStats = {
+          totalReviews,
+          reviewsThisWeek,
+          reviewsToday,
+          averageRating,
+          positivePercentage,
+          positiveCount,
+          criticalReviewsCount,
+          distribution,
+          ratingCounts,
+          recentReviews: recentFeedbackList.map(item => ({
+            id: item.id,
+            name: item.name,
+            rating: item.rating,
+            comment: item.comment,
+            createdAt: item.createdAt,
+          })),
+          reviewSettings: reviewSettings || {
+            googleEnabled: true,
+            googleRating: 4.9,
+            googleCount: 524,
+            googleUrl: "https://share.google/T4eEjxMJkqDKaFWGN",
+            trustpilotEnabled: true,
+            trustpilotRating: 4.8,
+            trustpilotCount: 320,
+            trustpilotUrl: "https://www.trustpilot.com/review/biodata99.com"
+          }
+        };
+
         return {
           totalUsers,
           newUsersToday,
           totalDownloads,
+          totalPaidDownloads,
+          totalFreeDownloads,
           downloadsThisWeek,
+          paidDownloadsThisWeek,
+          freeDownloadsThisWeek,
           totalRevenue,
           revenueToday,
           recentTransactions,
@@ -153,12 +289,15 @@ export default async function dashboardRoutes(app, options) {
           pendingAffiliateRequests,
           pendingWithdrawalRequests,
           pendingCommissions,
+          reviewStats,
         };
       });
 
       return reply.send({
         ...stats,
-        liveMetrics: null,
+        liveMetrics: {
+          criticalReviewsCount: stats.reviewStats?.criticalReviewsCount || 0
+        },
         systemMetrics: null
       });
     } catch (error) {

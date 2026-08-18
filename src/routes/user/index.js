@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import nodemailer from 'nodemailer';
-import { getCachedOrFetch } from '../../lib/redis.js';
+import { getCachedOrFetch, redis } from '../../lib/redis.js';
 import { mapDbTemplateToConfig } from '../../../helpers.js';
 
 const SETTINGS_CACHE_KEY = "admin:review-settings";
@@ -172,6 +172,15 @@ app.post('/api/feedback', {
         comment: comment || null,
       },
     });
+
+    if (redis && redis.status === 'ready') {
+      try {
+        await redis.del('admin:feedback');
+        await redis.del('admin:dashboard-stats');
+      } catch (cacheErr) {
+        app.log.warn('Failed to invalidate feedback cache:', cacheErr);
+      }
+    }
 
     return { success: true, feedback };
   } catch (error) {
@@ -403,8 +412,7 @@ app.post('/api/contact', async (request, reply) => {
           </p>
           
           <div style="border-top: 1px solid #eee; margin-top: 30px; padding-top: 15px; text-align: center; font-size: 12px; color: #888888;">
-            <p style="margin: 0 0 5px 0;">Have an urgent question? You can also message us directly on WhatsApp!</p>
-            <a href="https://wa.me/8208892771" style="color: #25d366; font-weight: bold; text-decoration: none;">Chat with Support on WhatsApp</a>
+            <p style="margin: 0;">We typically reply within 24 hours during working days.</p>
           </div>
         </div>
       `,

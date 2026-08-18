@@ -7,7 +7,6 @@ import proxyRoutes from './proxy/index.js';
 import stickersRoutes from './stickers/index.js';
 import publicTemplateRoutes from './templates/index.js';
 import userRoutes from './user/index.js';
-import whatsappRoutes from './whatsapp/index.js';
 import affiliateRoutes from './affiliate/index.js';
 import blogRoutes from './blog/index.js';
 
@@ -29,6 +28,5 @@ export default async function appRoutes(app, options) {
   await app.register(stickersRoutes);
   await app.register(publicTemplateRoutes);
   await app.register(userRoutes);
-  await app.register(whatsappRoutes);
   await app.register(blogRoutes);
 }
