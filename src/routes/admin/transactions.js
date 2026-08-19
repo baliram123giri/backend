@@ -427,21 +427,25 @@ export default async function adminTransactionsRoutes(app, options) {
 
       const rzOrderIds = targetOrders.map(o => o.razorpayOrderId).filter(Boolean);
 
-      // 2. Delete linked download logs for orders
-      if (rzOrderIds.length > 0) {
-        await prisma.downloadLog.deleteMany({
-          where: { orderId: { in: rzOrderIds } },
-        }).catch(() => {});
-      }
-
-      // 3. Delete matching free download logs by direct ID
+      // 2 & 3. Delete matching download logs by direct ID, orderId, or razorpayOrderId
       const deletedLogs = await prisma.downloadLog.deleteMany({
-        where: { id: { in: targetIds } },
+        where: {
+          OR: [
+            { id: { in: targetIds } },
+            { orderId: { in: targetIds } },
+            ...(rzOrderIds.length > 0 ? [{ orderId: { in: rzOrderIds } }] : [])
+          ]
+        },
       }).catch(() => ({ count: 0 }));
 
-      // 4. Delete matching orders by direct ID
+      // 4. Delete matching orders by direct ID or razorpayOrderId
       const deletedOrders = await prisma.order.deleteMany({
-        where: { id: { in: targetIds } },
+        where: {
+          OR: [
+            { id: { in: targetIds } },
+            { razorpayOrderId: { in: targetIds } }
+          ]
+        },
       }).catch(() => ({ count: 0 }));
 
       const totalDeleted = (deletedOrders.count || 0) + (deletedLogs.count || 0);
@@ -455,6 +459,37 @@ export default async function adminTransactionsRoutes(app, options) {
     } catch (error) {
       app.log.error('Delete transactions error:', error);
       return reply.status(500).send({ error: 'Failed to delete transaction' });
+    }
+  });
+
+  // POST clear all failed download logs and failed orders
+  app.post('/failed-logs/clear', async (request, reply) => {
+    try {
+      const deletedLogs = await prisma.downloadLog.deleteMany({
+        where: { errorMsg: { not: null } }
+      }).catch(() => ({ count: 0 }));
+
+      const deletedOrders = await prisma.order.deleteMany({
+        where: { OR: [{ status: 'failed' }, { downloadStatus: 'failed' }] }
+      }).catch(() => ({ count: 0 }));
+
+      if (redis && redis.status === 'ready') {
+        try {
+          const keys = await redis.keys('transactions:*');
+          if (keys.length > 0) await redis.del(keys);
+          await redis.del('admin:dashboard-stats');
+        } catch (e) {}
+      }
+
+      return reply.send({
+        success: true,
+        message: `Successfully cleared ${(deletedLogs.count || 0) + (deletedOrders.count || 0)} failed record(s)`,
+        deletedLogsCount: deletedLogs.count || 0,
+        deletedOrdersCount: deletedOrders.count || 0
+      });
+    } catch (err) {
+      app.log.error('Error clearing failed logs:', err);
+      return reply.status(500).send({ error: 'Failed to clear failed logs' });
     }
   });
 }

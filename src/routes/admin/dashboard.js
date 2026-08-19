@@ -44,6 +44,12 @@ export default async function dashboardRoutes(app, options) {
           freeDownloadsThisWeek,
           pastWeekFreeDownloads,
           recentDownloadLogsRaw,
+          totalFailedDownloadsCount,
+          failedDownloadsTodayCount,
+          totalFailedOrdersCount,
+          failedOrdersTodayCount,
+          recentFailedOrdersRaw,
+          recentFailedLogsRaw,
         ] = await Promise.all([
           prisma.user.count().catch(() => 0),
           prisma.user.count({ where: { createdAt: { gte: oneDayAgo } } }).catch(() => 0),
@@ -53,13 +59,13 @@ export default async function dashboardRoutes(app, options) {
           prisma.order.aggregate({ where: { status: "paid", createdAt: { gte: oneDayAgo } }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
           prisma.template.findMany({ select: { id: true, name: true } }).catch(() => []),
           prisma.order.findMany({
-            take: 5,
+            take: 10,
             orderBy: { createdAt: "desc" },
             include: {
               downloadLogs: {
                 take: 1,
                 orderBy: { createdAt: "desc" },
-                select: { location: true, name: true }
+                select: { location: true, name: true, errorMsg: true }
               }
             }
           }).catch(() => []),
@@ -91,7 +97,28 @@ export default async function dashboardRoutes(app, options) {
             select: { createdAt: true }
           }).catch(() => []),
           prisma.downloadLog.findMany({
-            take: 5,
+            take: 10,
+            orderBy: { createdAt: "desc" }
+          }).catch(() => []),
+          prisma.downloadLog.count({ where: { errorMsg: { not: null } } }).catch(() => 0),
+          prisma.downloadLog.count({ where: { errorMsg: { not: null }, createdAt: { gte: oneDayAgo } } }).catch(() => 0),
+          prisma.order.count({ where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }] } }).catch(() => 0),
+          prisma.order.count({ where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }], createdAt: { gte: oneDayAgo } } }).catch(() => 0),
+          prisma.order.findMany({
+            where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }] },
+            take: 10,
+            orderBy: { createdAt: "desc" },
+            include: {
+              downloadLogs: {
+                take: 1,
+                orderBy: { createdAt: "desc" },
+                select: { location: true, name: true, errorMsg: true }
+              }
+            }
+          }).catch(() => []),
+          prisma.downloadLog.findMany({
+            where: { errorMsg: { not: null }, orderId: null },
+            take: 10,
             orderBy: { createdAt: "desc" }
           }).catch(() => [])
         ]);
@@ -206,10 +233,91 @@ export default async function dashboardRoutes(app, options) {
             };
           });
 
-        // Combine and sort by createdAt desc (max 5 latest for dashboard overview)
-        const recentTransactions = [...formattedOrders, ...formattedFreeLogs]
+        // Combine and sort by createdAt desc
+        // Format failed orders and failed downloads
+        const formattedFailedOrders = (recentFailedOrdersRaw || []).map(order => {
+          const template = templatesList.find(t => t.id === order.templateId);
+          const dlLocation = order.downloadLogs?.[0]?.location;
+          const dlName = order.downloadLogs?.[0]?.name;
+          const dlError = order.downloadLogs?.[0]?.errorMsg;
+          const resolvedDisplayName = getDisplayName(order.customerName || dlName, order.razorpayOrderId, order.id, false);
+          const failureReason = dlError || (order.status === "failed" ? "Payment checkout failed or was cancelled" : "Document generation / export failed");
+
+          return {
+            id: order.id,
+            orderId: order.razorpayOrderId,
+            name: resolvedDisplayName,
+            location: dlLocation || order.customerPhone || order.customerEmail || "Direct Checkout",
+            biodataLocation: dlLocation || null,
+            customerName: resolvedDisplayName,
+            customerEmail: order.customerEmail,
+            customerPhone: order.customerPhone,
+            format: (order.format || 'PDF').toUpperCase(),
+            amount: Number((order.amount || 0).toFixed(2)),
+            currency: order.currency || "INR",
+            isFree: Number(order.amount || 0) === 0,
+            paymentType: Number(order.amount || 0) === 0 ? "FREE" : "PAID",
+            status: "FAILED",
+            downloadStatus: "failed",
+            errorMsg: failureReason,
+            templateId: order.templateId,
+            templateName: template ? template.name : "Premium Theme",
+            razorpayOrderId: order.razorpayOrderId,
+            createdAt: order.createdAt,
+          };
+        });
+
+        const formattedFailedFreeLogs = (recentFailedLogsRaw || [])
+          .filter(log => !log.orderId)
+          .map(log => {
+            const template = templatesList.find(t => t.id === log.templateId);
+            const resolvedDisplayName = getDisplayName(log.name, null, log.id, true);
+            return {
+              id: log.id,
+              orderId: null,
+              name: resolvedDisplayName,
+              location: log.location || "Direct Download",
+              biodataLocation: log.location || null,
+              customerName: resolvedDisplayName,
+              customerEmail: null,
+              customerPhone: null,
+              format: (log.format || 'PDF').toUpperCase(),
+              amount: 0,
+              currency: "INR",
+              isFree: true,
+              paymentType: "FREE",
+              status: "FAILED",
+              downloadStatus: "failed",
+              errorMsg: log.errorMsg || "Free download package generation failed",
+              templateId: log.templateId,
+              templateName: template ? template.name : "Standard Theme",
+              razorpayOrderId: null,
+              createdAt: log.createdAt,
+            };
+          });
+
+        const recentFailedList = [...formattedFailedOrders, ...formattedFailedFreeLogs]
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-          .slice(0, 5);
+          .slice(0, 10);
+
+        const totalFailedCount = (totalFailedDownloadsCount || 0) + (totalFailedOrdersCount || 0);
+        const failedTodayCount = (failedDownloadsTodayCount || 0) + (failedOrdersTodayCount || 0);
+        const totalAttempts = totalDownloads + totalFailedCount;
+        const failureRate = totalAttempts > 0 ? Number(((totalFailedCount / totalAttempts) * 100).toFixed(1)) : 0;
+
+        const failedStats = {
+          totalFailed: totalFailedCount,
+          totalFailedDownloads: totalFailedDownloadsCount || 0,
+          totalFailedPayments: totalFailedOrdersCount || 0,
+          failedToday: failedTodayCount,
+          failureRate,
+          recentFailed: recentFailedList,
+        };
+
+        const recentTransactions = [...formattedOrders, ...formattedFreeLogs, ...recentFailedList]
+          .filter((item, index, self) => index === self.findIndex(t => t.id === item.id))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 15);
 
         // Template popularity mapping
         let templatePopularity = (groupedPopularity || []).map((item) => {
@@ -307,13 +415,16 @@ export default async function dashboardRoutes(app, options) {
           pendingWithdrawalRequests: pendingWithdrawalRequests || 0,
           pendingCommissions: pendingCommissions || 0,
           reviewStats,
+          failedStats,
         };
       });
 
       return reply.send({
         ...stats,
         liveMetrics: {
-          criticalReviewsCount: stats.reviewStats?.criticalReviewsCount || 0
+          criticalReviewsCount: stats.reviewStats?.criticalReviewsCount || 0,
+          totalFailedCount: stats.failedStats?.totalFailed || 0,
+          failedTodayCount: stats.failedStats?.failedToday || 0,
         },
         systemMetrics: null
       });

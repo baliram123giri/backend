@@ -74,19 +74,8 @@ const templateSelect = {
 export default async function routes(app, options) {
 app.get('/api/bootstrap', async (request, reply) => {
   try {
-    const data = await getCachedOrFetch('templates:bootstrap', 300, async () => {
-      const [dbTemplates, dbStickers, dbBackgrounds, dbReviewSettings] = await Promise.all([
-        prisma.template.findMany({
-          where: { active: true, isDefault: true },
-          select: templateSelect,
-          orderBy: { createdAt: 'desc' },
-          take: 100
-        }),
-        prisma.sticker.findMany({
-          where: { type: 'Mantra' },
-          orderBy: { createdAt: 'desc' },
-          take: 100
-        }),
+    const data = await getCachedOrFetch('app:bootstrap', 300, async () => {
+      const [dbBackgrounds, dbReviewSettings] = await Promise.all([
         prisma.background.findMany({
           orderBy: { createdAt: 'desc' },
           take: 100
@@ -109,8 +98,6 @@ app.get('/api/bootstrap', async (request, reply) => {
       ]);
 
       return {
-        templates: dbTemplates.map(mapDbTemplateToConfig),
-        stickers: dbStickers,
         backgrounds: dbBackgrounds,
         reviewSettings: dbReviewSettings
       };
