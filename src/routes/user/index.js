@@ -261,6 +261,45 @@ app.post('/api/feedback', {
   });
 
 // -------------------------------------------------------------
+// 7.1 POST /api/check-free-download-limit
+// -------------------------------------------------------------
+  app.post('/api/check-free-download-limit', async (request, reply) => {
+    try {
+      const { name } = request.body || {};
+
+      const trimmedName = typeof name === 'string' ? name.trim() : '';
+      if (!trimmedName || trimmedName.length < 2) {
+        return { success: true, count: 0, limit: 2, limitReached: false };
+      }
+
+      // Check strictly by candidate name for free downloads in database
+      const count = await prisma.downloadLog.count({
+        where: {
+          orderId: null,
+          errorMsg: null,
+          name: { equals: trimmedName, mode: 'insensitive' },
+        },
+      });
+
+      const limit = 2;
+      const limitReached = count >= limit;
+
+      return {
+        success: true,
+        count,
+        limit,
+        limitReached,
+        message: limitReached
+          ? 'You have already downloaded free biodata 2 times. Please use a premium template or pay ₹20 for this template.'
+          : null,
+      };
+    } catch (error) {
+      app.log.error('Check free download limit error:', error);
+      return { success: true, count: 0, limit: 2, limitReached: false };
+    }
+  });
+
+// -------------------------------------------------------------
 // 8. POST /api/contact
 // -------------------------------------------------------------
 app.post('/api/contact', async (request, reply) => {
