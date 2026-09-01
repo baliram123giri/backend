@@ -239,6 +239,10 @@ app.post('/api/feedback', {
           if (txKeys.length > 0) {
             await redis.del(txKeys);
           }
+          if (isFree && resolvedName) {
+            const freeKey = `ratelimit:free_dl:${resolvedName.trim().toLowerCase()}_${(resolvedLocation || '').trim().toLowerCase()}`;
+            await redis.del(freeKey);
+          }
         } catch (cacheErr) {
           console.warn('Redis cache invalidation error on download log:', cacheErr.message);
         }
@@ -276,7 +280,27 @@ app.post('/api/feedback', {
         return { success: true, count: 0, limit: 2, limitReached: false };
       }
 
-      // Check strictly by candidate name and Date of Birth (DOB) for free downloads in database
+      const cacheKey = `ratelimit:free_dl:${trimmedName.toLowerCase()}_${trimmedDob.toLowerCase()}`;
+
+      // 1. Fast Redis check (1ms response)
+      if (redis && redis.status === 'ready') {
+        const cachedCount = await redis.get(cacheKey).catch(() => null);
+        if (cachedCount !== null) {
+          const count = parseInt(cachedCount, 10) || 0;
+          const limitReached = count >= 2;
+          return {
+            success: true,
+            count,
+            limit: 2,
+            limitReached,
+            message: limitReached
+              ? 'You have already downloaded free biodata 2 times. Please use a premium template or pay ₹20 for this template.'
+              : null,
+          };
+        }
+      }
+
+      // 2. Database check with take: 2 (early exit as soon as 2 matches found)
       const whereCondition = {
         orderId: null,
         errorMsg: null,
@@ -287,12 +311,20 @@ app.post('/api/feedback', {
         whereCondition.location = { equals: trimmedDob, mode: 'insensitive' };
       }
 
-      const count = await prisma.downloadLog.count({
+      const matches = await prisma.downloadLog.findMany({
         where: whereCondition,
+        take: 2,
+        select: { id: true },
       });
 
+      const count = matches.length;
       const limit = 2;
       const limitReached = count >= limit;
+
+      // Cache count in Redis for 1 hour to keep subsequent clicks instantaneous
+      if (redis && redis.status === 'ready') {
+        await redis.set(cacheKey, String(count), 'EX', 3600).catch(() => {});
+      }
 
       return {
         success: true,

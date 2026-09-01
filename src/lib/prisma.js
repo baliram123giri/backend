@@ -8,8 +8,8 @@ dotenv.config();
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  max: 10,
+  connectionTimeoutMillis: 20000,
+  max: 20,
   keepAlive: true,
 });
 

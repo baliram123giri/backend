@@ -76,7 +76,7 @@ app.get('/robots.txt', async (request, reply) => {
 // Register all modular routes
 app.register(appRoutes);
 
-// Global Sentry Error Handler
+// Global Sentry Error Handler with guaranteed CORS headers
 app.setErrorHandler((error, request, reply) => {
   // Only capture 500+ errors or unhandled exceptions to Sentry
   if (!error.statusCode || error.statusCode >= 500) {
@@ -84,9 +84,30 @@ app.setErrorHandler((error, request, reply) => {
   }
   
   app.log.error(error);
+
+  const origin = request.headers.origin;
+  if (origin) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    reply.header('Access-Control-Allow-Origin', '*');
+  }
+
   reply.status(error.statusCode || 500).send({ 
     error: error.message || 'Internal Server Error' 
   });
+});
+
+// 404 Handler with guaranteed CORS headers
+app.setNotFoundHandler((request, reply) => {
+  const origin = request.headers.origin;
+  if (origin) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    reply.header('Access-Control-Allow-Origin', '*');
+  }
+  reply.status(404).send({ error: 'Route not found' });
 });
 
 // Start Server

@@ -16,47 +16,102 @@ export default async function dashboardRoutes(app, options) {
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
+        // Batch 1: 5 Consolidated High-Speed SQL Aggregations (replaces 23 separate table scans)
+        const [userStatsRes, orderStatsRes, downloadStatsRes, feedbackStatsRes, affiliateStatsRes] = await Promise.all([
+          prisma.$queryRaw`
+            SELECT 
+              COUNT(*)::int as "totalUsers",
+              COUNT(CASE WHEN "createdAt" >= ${oneDayAgo} THEN 1 END)::int as "newUsersToday"
+            FROM "User"
+          `.catch(() => [{ totalUsers: 0, newUsersToday: 0 }]),
+
+          prisma.$queryRaw`
+            SELECT 
+              COUNT(CASE WHEN status = 'paid' THEN 1 END)::int as "totalPaidOrders",
+              COUNT(CASE WHEN status = 'paid' AND "createdAt" >= ${sevenDaysAgo} THEN 1 END)::int as "paidOrdersThisWeek",
+              COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0)::float as "totalRevenue",
+              COALESCE(SUM(CASE WHEN status = 'paid' AND "createdAt" >= ${oneDayAgo} THEN amount ELSE 0 END), 0)::float as "revenueToday",
+              COUNT(CASE WHEN status = 'failed' OR "downloadStatus" = 'failed' THEN 1 END)::int as "totalFailedOrdersCount",
+              COUNT(CASE WHEN (status = 'failed' OR "downloadStatus" = 'failed') AND "createdAt" >= ${oneDayAgo} THEN 1 END)::int as "failedOrdersTodayCount"
+            FROM "Order"
+          `.catch(() => [{ totalPaidOrders: 0, paidOrdersThisWeek: 0, totalRevenue: 0, revenueToday: 0, totalFailedOrdersCount: 0, failedOrdersTodayCount: 0 }]),
+
+          prisma.$queryRaw`
+            SELECT 
+              COUNT(CASE WHEN "orderId" IS NULL THEN 1 END)::int as "totalFreeDownloads",
+              COUNT(CASE WHEN "orderId" IS NULL AND "createdAt" >= ${oneDayAgo} THEN 1 END)::int as "freeDownloadsToday",
+              COUNT(CASE WHEN "orderId" IS NULL AND "createdAt" >= ${sevenDaysAgo} THEN 1 END)::int as "freeDownloadsThisWeek",
+              COUNT(CASE WHEN "errorMsg" IS NOT NULL THEN 1 END)::int as "totalFailedDownloadsCount",
+              COUNT(CASE WHEN "errorMsg" IS NOT NULL AND "createdAt" >= ${oneDayAgo} THEN 1 END)::int as "failedDownloadsTodayCount"
+            FROM "DownloadLog"
+          `.catch(() => [{ totalFreeDownloads: 0, freeDownloadsToday: 0, freeDownloadsThisWeek: 0, totalFailedDownloadsCount: 0, failedDownloadsTodayCount: 0 }]),
+
+          prisma.$queryRaw`
+            SELECT 
+              COUNT(*)::int as "feedbackCount",
+              COUNT(CASE WHEN "createdAt" >= ${oneDayAgo} THEN 1 END)::int as "feedbackCountToday",
+              COUNT(CASE WHEN "createdAt" >= ${sevenDaysAgo} THEN 1 END)::int as "feedbackCountThisWeek",
+              COALESCE(AVG(rating), 5.0)::float as "feedbackAvg"
+            FROM "Feedback"
+          `.catch(() => [{ feedbackCount: 0, feedbackCountToday: 0, feedbackCountThisWeek: 0, feedbackAvg: 5.0 }]),
+
+          prisma.$queryRaw`
+            SELECT 
+              (SELECT COUNT(*)::int FROM "Affiliate") as "totalAffiliates",
+              (SELECT COUNT(*)::int FROM "Affiliate" WHERE "createdAt" >= ${oneDayAgo})::int as "newAffiliatesToday",
+              (SELECT COUNT(*)::int FROM "Affiliate" WHERE status = 'pending')::int as "pendingAffiliateRequests",
+              (SELECT COUNT(*)::int FROM "Withdrawal" WHERE status = 'pending')::int as "pendingWithdrawalRequests",
+              (SELECT COUNT(*)::int FROM "Commission" WHERE status = 'pending')::int as "pendingCommissions"
+          `.catch(() => [{ totalAffiliates: 0, newAffiliatesToday: 0, pendingAffiliateRequests: 0, pendingWithdrawalRequests: 0, pendingCommissions: 0 }])
+        ]);
+
+        const userStats = (Array.isArray(userStatsRes) ? userStatsRes[0] : null) || {};
+        const orderStats = (Array.isArray(orderStatsRes) ? orderStatsRes[0] : null) || {};
+        const downloadStats = (Array.isArray(downloadStatsRes) ? downloadStatsRes[0] : null) || {};
+        const feedbackStats = (Array.isArray(feedbackStatsRes) ? feedbackStatsRes[0] : null) || {};
+        const affiliateStats = (Array.isArray(affiliateStatsRes) ? affiliateStatsRes[0] : null) || {};
+
+        // Extracted variables preserving exact 100% naming parity
+        const totalUsers = userStats.totalUsers || 0;
+        const newUsersToday = userStats.newUsersToday || 0;
+        const totalPaidOrders = orderStats.totalPaidOrders || 0;
+        const paidOrdersThisWeek = orderStats.paidOrdersThisWeek || 0;
+        const totalRevenue = Number((orderStats.totalRevenue || 0).toFixed(2));
+        const revenueToday = Number((orderStats.revenueToday || 0).toFixed(2));
+        const totalFailedOrdersCount = orderStats.totalFailedOrdersCount || 0;
+        const failedOrdersTodayCount = orderStats.failedOrdersTodayCount || 0;
+
+        const totalFreeDownloads = downloadStats.totalFreeDownloads || 0;
+        const freeDownloadsToday = downloadStats.freeDownloadsToday || 0;
+        const freeDownloadsThisWeek = downloadStats.freeDownloadsThisWeek || 0;
+        const totalFailedDownloadsCount = downloadStats.totalFailedDownloadsCount || 0;
+        const failedDownloadsTodayCount = downloadStats.failedDownloadsTodayCount || 0;
+
+        const feedbackCount = feedbackStats.feedbackCount || 0;
+        const feedbackCountToday = feedbackStats.feedbackCountToday || 0;
+        const feedbackCountThisWeek = feedbackStats.feedbackCountThisWeek || 0;
+        const feedbackAvg = { _avg: { rating: feedbackStats.feedbackAvg ?? 5.0 } };
+
+        const totalAffiliates = affiliateStats.totalAffiliates || 0;
+        const newAffiliatesToday = affiliateStats.newAffiliatesToday || 0;
+        const pendingAffiliateRequests = affiliateStats.pendingAffiliateRequests || 0;
+        const pendingWithdrawalRequests = affiliateStats.pendingWithdrawalRequests || 0;
+        const pendingCommissions = affiliateStats.pendingCommissions || 0;
+
+        // Batch 2: Lists & Groupings
         const [
-          totalUsers,
-          newUsersToday,
-          totalPaidOrders,
-          paidOrdersThisWeek,
-          paidOrders,
-          paidOrdersToday,
           templates,
           recentOrdersRaw,
           groupedPopularity,
-          totalAffiliates,
-          newAffiliatesToday,
-          pendingAffiliateRequests,
-          pendingWithdrawalRequests,
-          pendingCommissions,
           pastWeekOrders,
-          feedbackCount,
-          feedbackCountToday,
-          feedbackCountThisWeek,
-          feedbackAvg,
           feedbackRatingGroup,
           recentFeedbackList,
           reviewSettings,
-          totalFreeDownloads,
-          freeDownloadsToday,
-          freeDownloadsThisWeek,
           pastWeekFreeDownloads,
           recentDownloadLogsRaw,
-          totalFailedDownloadsCount,
-          failedDownloadsTodayCount,
-          totalFailedOrdersCount,
-          failedOrdersTodayCount,
           recentFailedOrdersRaw,
-          recentFailedLogsRaw,
+          recentFailedLogsRaw
         ] = await Promise.all([
-          prisma.user.count().catch(() => 0),
-          prisma.user.count({ where: { createdAt: { gte: oneDayAgo } } }).catch(() => 0),
-          prisma.order.count({ where: { status: "paid" } }).catch(() => 0),
-          prisma.order.count({ where: { status: "paid", createdAt: { gte: sevenDaysAgo } } }).catch(() => 0),
-          prisma.order.aggregate({ where: { status: "paid" }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
-          prisma.order.aggregate({ where: { status: "paid", createdAt: { gte: oneDayAgo } }, _sum: { amount: true } }).catch(() => ({ _sum: { amount: 0 } })),
           prisma.template.findMany({ select: { id: true, name: true } }).catch(() => []),
           prisma.order.findMany({
             take: 10,
@@ -70,28 +125,16 @@ export default async function dashboardRoutes(app, options) {
             }
           }).catch(() => []),
           prisma.order.groupBy({ by: ["templateId"], where: { status: "paid" }, _count: { templateId: true } }).catch(() => []),
-          prisma.affiliate.count().catch(() => 0),
-          prisma.affiliate.count({ where: { createdAt: { gte: oneDayAgo } } }).catch(() => 0),
-          prisma.affiliate.count({ where: { status: 'pending' } }).catch(() => 0),
-          prisma.withdrawal.count({ where: { status: 'pending' } }).catch(() => 0),
-          prisma.commission.count({ where: { status: 'pending' } }).catch(() => 0),
           prisma.order.findMany({
             where: { status: "paid", createdAt: { gte: sevenDaysAgo } },
             select: { createdAt: true }
           }).catch(() => []),
-          prisma.feedback.count().catch(() => 0),
-          prisma.feedback.count({ where: { createdAt: { gte: oneDayAgo } } }).catch(() => 0),
-          prisma.feedback.count({ where: { createdAt: { gte: sevenDaysAgo } } }).catch(() => 0),
-          prisma.feedback.aggregate({ _avg: { rating: true } }).catch(() => ({ _avg: { rating: 5.0 } })),
           prisma.feedback.groupBy({ by: ["rating"], _count: { rating: true } }).catch(() => []),
           prisma.feedback.findMany({
             take: 5,
             orderBy: { createdAt: "desc" }
           }).catch(() => []),
           prisma.reviewSettings.findUnique({ where: { id: "global" } }).catch(() => null),
-          prisma.downloadLog.count({ where: { orderId: null } }).catch(() => 0),
-          prisma.downloadLog.count({ where: { orderId: null, createdAt: { gte: oneDayAgo } } }).catch(() => 0),
-          prisma.downloadLog.count({ where: { orderId: null, createdAt: { gte: sevenDaysAgo } } }).catch(() => 0),
           prisma.downloadLog.findMany({
             where: { orderId: null, createdAt: { gte: sevenDaysAgo } },
             select: { createdAt: true }
@@ -100,10 +143,6 @@ export default async function dashboardRoutes(app, options) {
             take: 10,
             orderBy: { createdAt: "desc" }
           }).catch(() => []),
-          prisma.downloadLog.count({ where: { errorMsg: { not: null } } }).catch(() => 0),
-          prisma.downloadLog.count({ where: { errorMsg: { not: null }, createdAt: { gte: oneDayAgo } } }).catch(() => 0),
-          prisma.order.count({ where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }] } }).catch(() => 0),
-          prisma.order.count({ where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }], createdAt: { gte: oneDayAgo } } }).catch(() => 0),
           prisma.order.findMany({
             where: { OR: [{ status: "failed" }, { downloadStatus: "failed" }] },
             take: 10,
@@ -126,10 +165,6 @@ export default async function dashboardRoutes(app, options) {
         const totalPaidDownloads = totalPaidOrders || 0;
         const totalDownloads = (totalPaidOrders || 0) + (totalFreeDownloads || 0);
         const downloadsThisWeek = (paidOrdersThisWeek || 0) + (freeDownloadsThisWeek || 0);
-
-        // Safe revenue calculations
-        const totalRevenue = Number(((paidOrders?._sum?.amount ?? 0)).toFixed(2));
-        const revenueToday = Number(((paidOrdersToday?._sum?.amount ?? 0)).toFixed(2));
 
         // Calculate 7-day traffic in memory efficiently (combining paid and free generated documents)
         const dailyTraffic = [];
