@@ -181,10 +181,12 @@ app.post('/api/feedback', {
 // -------------------------------------------------------------
   app.post('/api/download-log', async (request, reply) => {
     try {
-      const { name, location, format, templateId, orderId, isFree, status, errorMsg } = request.body || {};
+      const { name, location, format, templateId, orderId, isFree, status, errorMsg, dob } = request.body || {};
 
       const resolvedName = name || 'Matrimonial Biodata';
       const resolvedFormat = (format || 'pdf').toUpperCase();
+      const trimmedDob = typeof dob === 'string' ? dob.trim() : '';
+      const resolvedLocation = trimmedDob || (typeof location === 'string' ? location.trim() : null);
 
       // Resolve orderId only if not explicitly a free download
       let resolvedOrderId = orderId || null;
@@ -219,7 +221,7 @@ app.post('/api/feedback', {
       const log = await prisma.downloadLog.create({
         data: {
           name: resolvedName,
-          location: location || null,
+          location: resolvedLocation,
           format: resolvedFormat,
           templateId: templateId || null,
           ipAddress,
@@ -265,20 +267,28 @@ app.post('/api/feedback', {
 // -------------------------------------------------------------
   app.post('/api/check-free-download-limit', async (request, reply) => {
     try {
-      const { name } = request.body || {};
+      const { name, dob } = request.body || {};
 
       const trimmedName = typeof name === 'string' ? name.trim() : '';
+      const trimmedDob = typeof dob === 'string' ? dob.trim() : '';
+
       if (!trimmedName || trimmedName.length < 2) {
         return { success: true, count: 0, limit: 2, limitReached: false };
       }
 
-      // Check strictly by candidate name for free downloads in database
+      // Check strictly by candidate name and Date of Birth (DOB) for free downloads in database
+      const whereCondition = {
+        orderId: null,
+        errorMsg: null,
+        name: { equals: trimmedName, mode: 'insensitive' },
+      };
+
+      if (trimmedDob && trimmedDob.length >= 2) {
+        whereCondition.location = { equals: trimmedDob, mode: 'insensitive' };
+      }
+
       const count = await prisma.downloadLog.count({
-        where: {
-          orderId: null,
-          errorMsg: null,
-          name: { equals: trimmedName, mode: 'insensitive' },
-        },
+        where: whereCondition,
       });
 
       const limit = 2;
