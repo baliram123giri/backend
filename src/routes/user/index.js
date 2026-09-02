@@ -186,7 +186,17 @@ app.post('/api/feedback', {
       const resolvedName = name || 'Matrimonial Biodata';
       const resolvedFormat = (format || 'pdf').toUpperCase();
       const trimmedDob = typeof dob === 'string' ? dob.trim() : '';
-      const resolvedLocation = trimmedDob || (typeof location === 'string' ? location.trim() : null);
+      const trimmedLoc = typeof location === 'string' ? location.trim() : '';
+
+      // Preserve actual customer location/address while encoding DOB tag for rate limiting
+      let resolvedLocation = null;
+      if (trimmedLoc && trimmedDob) {
+        resolvedLocation = `${trimmedLoc} • DOB: ${trimmedDob}`;
+      } else if (trimmedLoc) {
+        resolvedLocation = trimmedLoc;
+      } else if (trimmedDob) {
+        resolvedLocation = `DOB: ${trimmedDob}`;
+      }
 
       // Resolve orderId only if not explicitly a free download
       let resolvedOrderId = orderId || null;
@@ -240,7 +250,7 @@ app.post('/api/feedback', {
             await redis.del(txKeys);
           }
           if (isFree && resolvedName) {
-            const freeKey = `ratelimit:free_dl:${resolvedName.trim().toLowerCase()}_${(resolvedLocation || '').trim().toLowerCase()}`;
+            const freeKey = `ratelimit:free_dl:${resolvedName.trim().toLowerCase()}_${trimmedDob.toLowerCase()}`;
             await redis.del(freeKey);
           }
         } catch (cacheErr) {
@@ -308,7 +318,7 @@ app.post('/api/feedback', {
       };
 
       if (trimmedDob && trimmedDob.length >= 2) {
-        whereCondition.location = { equals: trimmedDob, mode: 'insensitive' };
+        whereCondition.location = { contains: trimmedDob, mode: 'insensitive' };
       }
 
       const matches = await prisma.downloadLog.findMany({
