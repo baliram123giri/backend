@@ -183,7 +183,7 @@ app.post('/api/feedback', {
     try {
       const { name, location, format, templateId, orderId, isFree, status, errorMsg, dob } = request.body || {};
 
-      const resolvedName = name || 'Matrimonial Biodata';
+      const resolvedName = (typeof name === 'string' ? name.trim() : '') || 'Matrimonial Biodata';
       const resolvedFormat = (format || 'pdf').toUpperCase();
       const trimmedDob = typeof dob === 'string' ? dob.trim() : '';
       const trimmedLoc = typeof location === 'string' ? location.trim() : '';
@@ -200,11 +200,11 @@ app.post('/api/feedback', {
 
       // Resolve orderId only if not explicitly a free download
       let resolvedOrderId = orderId || null;
-      if (!isFree && !resolvedOrderId && name && templateId) {
+      if (!isFree && !resolvedOrderId && resolvedName && templateId) {
         try {
           const matchingOrder = await prisma.order.findFirst({
             where: {
-              customerName: name,
+              customerName: { equals: resolvedName, mode: 'insensitive' },
               templateId: templateId,
               status: 'paid',
             },
@@ -250,8 +250,10 @@ app.post('/api/feedback', {
             await redis.del(txKeys);
           }
           if (isFree && resolvedName) {
-            const freeKey = `ratelimit:free_dl:${resolvedName.trim().toLowerCase()}_${trimmedDob.toLowerCase()}`;
-            await redis.del(freeKey);
+            const freeKeys = await redis.keys(`ratelimit:free_dl:${resolvedName.toLowerCase()}*`);
+            if (freeKeys.length > 0) {
+              await redis.del(freeKeys);
+            }
           }
         } catch (cacheErr) {
           console.warn('Redis cache invalidation error on download log:', cacheErr.message);
@@ -286,7 +288,8 @@ app.post('/api/feedback', {
       const trimmedName = typeof name === 'string' ? name.trim() : '';
       const trimmedDob = typeof dob === 'string' ? dob.trim() : '';
 
-      if (!trimmedName || trimmedName.length < 2) {
+      // Limit check ONLY applies when BOTH Full Name and Date of Birth (DOB) exist
+      if (!trimmedName || trimmedName.length < 2 || !trimmedDob || trimmedDob.length < 2) {
         return { success: true, count: 0, limit: 2, limitReached: false };
       }
 
@@ -310,22 +313,15 @@ app.post('/api/feedback', {
         }
       }
 
-      // 2. Database check with take: 2 (early exit as soon as 2 matches found)
-      const whereCondition = {
-        orderId: null,
-        errorMsg: null,
-        name: { equals: trimmedName, mode: 'insensitive' },
-      };
-
-      if (trimmedDob && trimmedDob.length >= 2) {
-        whereCondition.location = { contains: trimmedDob, mode: 'insensitive' };
-      }
-
-      const matches = await prisma.downloadLog.findMany({
-        where: whereCondition,
-        take: 2,
-        select: { id: true },
-      });
+      // 2. Database check: only count free downloads that match BOTH the exact name and DOB
+      const matches = await prisma.$queryRaw`
+        SELECT id FROM "DownloadLog"
+        WHERE "orderId" IS NULL
+          AND "errorMsg" IS NULL
+          AND LOWER(TRIM("name")) = LOWER(${trimmedName})
+          AND "location" ILIKE ${'%' + trimmedDob + '%'}
+        LIMIT 2
+      `;
 
       const count = matches.length;
       const limit = 2;
