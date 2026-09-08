@@ -45,8 +45,18 @@ pipeline {
                     echo "Cleaning previous modules"
                     rm -rf node_modules
 
+                    echo "Cleaning corrupted puppeteer browser cache if present"
+                    if [ -d "$HOME/.cache/puppeteer" ]; then
+                        find "$HOME/.cache/puppeteer" -name "linux-*" -type d 2>/dev/null | while read -r dir; do
+                            if [ ! -f "$dir/chrome-linux64/chrome" ] && [ ! -f "$dir/chrome-headless-shell-linux64/chrome-headless-shell" ]; then
+                                echo "Removing corrupted Puppeteer directory: $dir"
+                                rm -rf "$dir"
+                            fi
+                        done
+                    fi
+
                     echo "Installing dependencies"
-                    npm install
+                    npm install || (echo "Retrying npm install after clearing Puppeteer cache..." && rm -rf "$HOME/.cache/puppeteer" && npm install)
 
                     echo "Pushing database schema to production database"
                     npx prisma db push --accept-data-loss
