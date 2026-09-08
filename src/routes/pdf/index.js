@@ -1,6 +1,7 @@
 import { renderHtmlToVectorPdf, renderHtmlToImage, renderHtmlToComboZip } from '../../services/pdfGenerator.js';
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
+import { getContentDisposition } from '../../lib/headerUtils.js';
 import * as Sentry from '@sentry/node';
 
 const renderRateLimitConfig = {
@@ -82,10 +83,9 @@ export default async function pdfRoutes(app, options) {
       console.log(`[PDF Route] Completed in ${totalDuration}ms for "${fileName}"`);
 
       // ── 3. Stream Binary PDF Directly to User (No Print Dialog) ───────────
-      const safeFileName = encodeURIComponent(fileName).replace(/['()]/g, escape);
       reply
         .header('Content-Type', 'application/pdf')
-        .header('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
+        .header('Content-Disposition', getContentDisposition(fileName, 'biodata', '.pdf'))
         .header('Content-Length', pdfBuffer.length)
         .header('X-Snapshot-Id', snapshotId || '')
         .header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -186,11 +186,11 @@ export default async function pdfRoutes(app, options) {
         ? 'image/png'
         : 'image/jpeg';
       const outFileName = isZip ? `${cleanName}_Images.zip` : fileName;
-      const safeFileName = encodeURIComponent(outFileName).replace(/['()]/g, escape);
+      const defaultExt = isZip ? '.zip' : (cleanFormat === 'PNG' ? '.png' : '.jpg');
 
       reply
         .header('Content-Type', mimeType)
-        .header('Content-Disposition', `attachment; filename="${outFileName}"; filename*=UTF-8''${safeFileName}`)
+        .header('Content-Disposition', getContentDisposition(outFileName, 'biodata', defaultExt))
         .header('Content-Length', result.buffer.length)
         .header('X-Snapshot-Id', snapshotId || '')
         .header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -274,11 +274,10 @@ export default async function pdfRoutes(app, options) {
 
       // 3. Stream Binary ZIP
       const outFileName = `${cleanName}_Combo.zip`;
-      const safeFileName = encodeURIComponent(outFileName).replace(/['()]/g, escape);
 
       reply
         .header('Content-Type', 'application/zip')
-        .header('Content-Disposition', `attachment; filename="${outFileName}"; filename*=UTF-8''${safeFileName}`)
+        .header('Content-Disposition', getContentDisposition(outFileName, 'biodata_combo', '.zip'))
         .header('Content-Length', zipBuffer.length)
         .header('X-Snapshot-Id', snapshotId || '')
         .header('Cache-Control', 'no-cache, no-store, must-revalidate')

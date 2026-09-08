@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
+import { getContentDisposition } from '../../lib/headerUtils.js';
 import {
   renderHtmlToVectorPdf,
   renderHtmlToComboZip,
@@ -95,10 +96,9 @@ export default async function restoreDownloadRoutes(app, options) {
           cleanName,
         });
 
-        const safeFileName = encodeURIComponent(fileName).replace(/['()]/g, escape);
         return reply
           .header('Content-Type', 'application/zip')
-          .header('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
+          .header('Content-Disposition', getContentDisposition(fileName, 'biodata_restored', '.zip'))
           .header('Content-Length', zipBuffer.length)
           .send(zipBuffer);
       }
@@ -110,10 +110,9 @@ export default async function restoreDownloadRoutes(app, options) {
           fileName,
         });
 
-        const safeFileName = encodeURIComponent(fileName).replace(/['()]/g, escape);
         return reply
           .header('Content-Type', 'application/pdf')
-          .header('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
+          .header('Content-Disposition', getContentDisposition(fileName, 'biodata_restored', '.pdf'))
           .header('Content-Length', pdfBuffer.length)
           .send(pdfBuffer);
       }
@@ -128,10 +127,9 @@ export default async function restoreDownloadRoutes(app, options) {
         });
 
         const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
-        const safeFileName = encodeURIComponent(fileName).replace(/['()]/g, escape);
         return reply
           .header('Content-Type', mimeType)
-          .header('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
+          .header('Content-Disposition', getContentDisposition(fileName, 'biodata_restored', `.${ext}`))
           .header('Content-Length', result.buffer.length)
           .send(result.buffer);
       }
