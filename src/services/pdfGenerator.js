@@ -1,6 +1,32 @@
 import puppeteer from 'puppeteer';
 import JSZip from 'jszip';
+import fs from 'fs';
 import { isPrivateOrLocalHost } from '../lib/ssrf.js';
+
+function resolveExecutablePath() {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  // Auto-detect system-installed Chromium or Google Chrome on Linux VPS
+  const candidatePaths = [
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+  ];
+
+  for (const p of candidatePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return p;
+      }
+    } catch {}
+  }
+
+  return undefined;
+}
 
 // ─── Concurrency Semaphore (Protective 2-Slot Capacity) ──────────────────────
 // VPS has 8GB shared with Jenkins, n8n, Postgres, Redis, PM2, etc.
@@ -66,8 +92,14 @@ export async function getChromiumBrowser() {
     console.log('[PDF Generator] Launching pre-warmed Chromium singleton...');
     const startTime = Date.now();
 
+    const executablePath = resolveExecutablePath();
+    if (executablePath) {
+      console.log(`[PDF Generator] Using detected browser executable at: ${executablePath}`);
+    }
+
     browserInstance = await puppeteer.launch({
       headless: 'new',
+      ...(executablePath ? { executablePath } : {}),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

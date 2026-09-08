@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "postinstall": "puppeteer browsers install chrome"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.83",
