@@ -40,7 +40,7 @@ export async function uploadToVPS(fileStr, subFolder) {
   // Create destination directory
   const normalizedSubFolder = subFolder.replace(/\\/g, "/");
   const destFolder = path.join(CLIENT_UPLOADS_DIR, ...normalizedSubFolder.split("/"));
-  
+
   if (!fs.existsSync(destFolder)) {
     fs.mkdirSync(destFolder, { recursive: true });
   }
@@ -56,10 +56,10 @@ export async function uploadToVPS(fileStr, subFolder) {
     }
     const header = fileStr.substring(0, commaIndex);
     const data = fileStr.substring(commaIndex + 1);
-    
+
     const mimeMatch = header.match(/data:([^;]+)/);
     mimeType = mimeMatch ? mimeMatch[1] : "";
-    
+
     if (header.includes(";base64")) {
       buffer = Buffer.from(data, "base64");
     } else {
@@ -136,7 +136,7 @@ export async function uploadToVPS(fileStr, subFolder) {
   if (process.platform === "win32") {
     await syncToRemoteVPS(buffer, normalizedSubFolder, finalFilename);
   }
-  
+
   // Return the full public URL with domain
   return `https://img.biodata99.com/biodata/${normalizedSubFolder}/${finalFilename}`;
 }
@@ -164,10 +164,10 @@ async function syncToRemoteVPS(buffer, subFolder, filename) {
           });
         });
       }).on("error", () => resolve()).connect({
-        host: process.env.VPS_HOST || "84.46.249.191",
+        host: process.env.VPS_HOST || "",
         port: 22,
         username: "root",
-        password: process.env.VPS_PASSWORD || "Mh21ce8818",
+        password: process.env.VPS_PASSWORD || "",
         readyTimeout: 5000,
       });
     });

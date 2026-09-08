@@ -210,6 +210,28 @@ app.post('/api/feedback', {
         } catch (snapErr) {
           console.warn('Failed to save snapshot in download-log:', snapErr.message);
         }
+      } else {
+        // Fallback: If snapshot wasn't passed directly, link any unlinked snapshot recently created
+        try {
+          const recentSnap = await prisma.downloadSnapshot.findFirst({
+            where: {
+              name: resolvedName,
+              downloadLogId: null,
+              createdAt: {
+                gte: new Date(Date.now() - 5 * 60 * 1000),
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (recentSnap) {
+            await prisma.downloadSnapshot.update({
+              where: { id: recentSnap.id },
+              data: { downloadLogId: log.id },
+            }).catch(() => {});
+          }
+        } catch (linkErr) {
+          console.warn('Failed to auto-link snapshot in download-log:', linkErr.message);
+        }
       }
 
       // Invalidate dashboard stats & transaction caches

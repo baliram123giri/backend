@@ -60,23 +60,70 @@ export default async function restoreDownloadRoutes(app, options) {
         }
       }
 
-      // 4. If id is a DownloadLog primary key, resolve its orderId
+      // 4. If id is a DownloadLog primary key, resolve its snapshot
       if (!snapshot) {
         const dLog = await prisma.downloadLog.findUnique({
           where: { id },
-          select: { id: true, orderId: true },
         });
 
-        if (dLog && dLog.orderId) {
-          snapshot = await prisma.downloadSnapshot.findFirst({
-            where: {
-              OR: [
-                { downloadLogId: dLog.id },
-                { orderId: dLog.orderId },
-              ],
-            },
-            orderBy: { createdAt: 'desc' },
-          });
+        if (dLog) {
+          // 4a. If orderId exists, check by downloadLogId or orderId
+          if (dLog.orderId) {
+            snapshot = await prisma.downloadSnapshot.findFirst({
+              where: {
+                OR: [
+                  { downloadLogId: dLog.id },
+                  { orderId: dLog.orderId },
+                ],
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+          }
+
+          // 4b. Direct downloadLogId match
+          if (!snapshot) {
+            snapshot = await prisma.downloadSnapshot.findFirst({
+              where: { downloadLogId: dLog.id },
+              orderBy: { createdAt: 'desc' },
+            });
+          }
+
+          // 4c. Match by customer name and approximate creation time (+/- 30 mins)
+          if (!snapshot && dLog.name) {
+            snapshot = await prisma.downloadSnapshot.findFirst({
+              where: {
+                name: dLog.name,
+                ...(dLog.templateId ? { templateId: dLog.templateId } : {}),
+                createdAt: {
+                  gte: new Date(dLog.createdAt.getTime() - 30 * 60 * 1000),
+                  lte: new Date(dLog.createdAt.getTime() + 30 * 60 * 1000),
+                },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            // 4d. Broadest fallback: match by customer name anywhere in 24 hours
+            if (!snapshot) {
+              snapshot = await prisma.downloadSnapshot.findFirst({
+                where: {
+                  name: dLog.name,
+                  createdAt: {
+                    gte: new Date(dLog.createdAt.getTime() - 24 * 60 * 60 * 1000),
+                    lte: new Date(dLog.createdAt.getTime() + 60 * 60 * 1000),
+                  },
+                },
+                orderBy: { createdAt: 'desc' },
+              });
+            }
+
+            // Auto-link found snapshot so future queries are instant
+            if (snapshot && !snapshot.downloadLogId) {
+              await prisma.downloadSnapshot.update({
+                where: { id: snapshot.id },
+                data: { downloadLogId: dLog.id },
+              }).catch(() => {});
+            }
+          }
         }
       }
 

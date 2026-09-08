@@ -1,5 +1,11 @@
 import { prisma, withRetry } from '../../lib/prisma.js';
-import { getCachedOrFetch } from '../../lib/redis.js';
+import { getCachedOrFetch, redis } from '../../lib/redis.js';
+import { getContentDisposition } from '../../lib/headerUtils.js';
+import {
+  renderHtmlToVectorPdf,
+  renderHtmlToImage,
+  renderHtmlToComboZip,
+} from '../../services/pdfGenerator.js';
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
 
@@ -98,7 +104,20 @@ export default async function routes(app, options) {
   // 3. POST /api/razorpay/create-order
   app.post('/api/razorpay/create-order', async (request, reply) => {
     try {
-      const { amount, currency, templateId, format, customerName, customerEmail, customerPhone, couponCode, ref } = request.body || {};
+      const {
+        amount,
+        currency,
+        templateId,
+        format,
+        customerName,
+        customerEmail,
+        customerPhone,
+        couponCode,
+        ref,
+        html,
+        renderedHtml,
+        snapshotData,
+      } = request.body || {};
 
       if (amount === undefined || amount === null || !templateId || !format) {
         return reply.status(400).send({ error: 'Amount, templateId, and format are required fields' });
@@ -165,6 +184,26 @@ export default async function routes(app, options) {
           })
         );
 
+        const snapshotHtml = html || renderedHtml;
+        if (snapshotHtml) {
+          try {
+            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            await prisma.downloadSnapshot.create({
+              data: {
+                name: customerName || 'Biodata',
+                format: (format || 'PDF').toUpperCase(),
+                templateId: templateId || null,
+                orderId: freeOrderId,
+                snapshotData: snapshotData || {},
+                renderedHtml: snapshotHtml,
+                expiresAt,
+              },
+            });
+          } catch (snapErr) {
+            app.log.warn('[Create Order] Free promo snapshot save warning:', snapErr.message);
+          }
+        }
+
         return reply.send({
           success: true,
           isFreeOrder: true,
@@ -201,6 +240,26 @@ export default async function routes(app, options) {
             },
           })
         );
+
+        const snapshotHtml = html || renderedHtml;
+        if (snapshotHtml) {
+          try {
+            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            await prisma.downloadSnapshot.create({
+              data: {
+                name: customerName || 'Biodata',
+                format: (format || 'PDF').toUpperCase(),
+                templateId: templateId || null,
+                orderId: mockOrderId,
+                snapshotData: snapshotData || {},
+                renderedHtml: snapshotHtml,
+                expiresAt,
+              },
+            });
+          } catch (snapErr) {
+            app.log.warn('[Create Order] Mock snapshot save warning:', snapErr.message);
+          }
+        }
 
         return reply.send({
           success: true,
@@ -244,6 +303,43 @@ export default async function routes(app, options) {
           },
         })
       );
+
+      const snapshotHtml = html || renderedHtml;
+      if (snapshotHtml) {
+        try {
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const snap = await prisma.downloadSnapshot.create({
+            data: {
+              name: customerName || 'Biodata',
+              format: (format || 'PDF').toUpperCase(),
+              templateId: templateId || null,
+              orderId: paymentOrder.id,
+              snapshotData: snapshotData || {},
+              renderedHtml: snapshotHtml,
+              expiresAt,
+            },
+          });
+          if (redis && redis.status === 'ready') {
+            await redis.set(
+              `snapshot:${paymentOrder.id}`,
+              JSON.stringify({
+                id: snap.id,
+                name: snap.name,
+                format: snap.format,
+                templateId,
+                orderId: paymentOrder.id,
+                snapshotData,
+                renderedHtml: snapshotHtml,
+                expiresAt: expiresAt.toISOString(),
+              }),
+              'EX',
+              86400
+            ).catch(() => {});
+          }
+        } catch (snapErr) {
+          app.log.warn('[Create Order] Live snapshot pre-save warning:', snapErr.message);
+        }
+      }
 
       return reply.send({
         success: true,
@@ -415,6 +511,230 @@ export default async function routes(app, options) {
     } catch (err) {
       app.log.error('Failed to update download status API:', err);
       return reply.status(200).send({ success: false, error: 'Internal Server Error' });
+    }
+  });
+
+  // 6. POST & GET /api/razorpay/callback (For mobile app-switch & redirect payments like PhonePe, GPay)
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/api/razorpay/callback',
+    handler: async (request, reply) => {
+      const clientUrl = process.env.CLIENT_URL || 'https://biodata99.com';
+      try {
+        const body = request.body || {};
+        const query = request.query || {};
+
+        const razorpay_order_id = body.razorpay_order_id || query.razorpay_order_id;
+        const razorpay_payment_id = body.razorpay_payment_id || query.razorpay_payment_id;
+        const razorpay_signature = body.razorpay_signature || query.razorpay_signature;
+        const errorCode = body['error[code]'] || query['error[code]'];
+        const errorDescription = body['error[description]'] || query['error[description]'];
+
+        if (errorCode || !razorpay_payment_id || !razorpay_signature) {
+          const errorMsg = errorDescription || 'Payment was cancelled or could not be completed';
+          const failRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
+          return reply.status(303).redirect(failRedirect);
+        }
+
+        const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+        let isVerified = false;
+
+        if (keySecret) {
+          const generatedSignature = crypto
+            .createHmac('sha256', keySecret)
+            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+            .digest('hex');
+
+          const genBuf = Buffer.from(generatedSignature, 'utf8');
+          const signBuf = Buffer.from(razorpay_signature, 'utf8');
+          isVerified = genBuf.length === signBuf.length && crypto.timingSafeEqual(genBuf, signBuf);
+        } else {
+          isVerified = process.env.NODE_ENV !== 'production';
+        }
+
+        if (!isVerified) {
+          const failRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
+          return reply.status(303).redirect(failRedirect);
+        }
+
+        const updatedOrder = await withRetry(() =>
+          prisma.order.update({
+            where: { razorpayOrderId: razorpay_order_id },
+            data: {
+              status: 'paid',
+              razorpayPaymentId: razorpay_payment_id,
+              razorpaySignature: razorpay_signature,
+            },
+          })
+        );
+
+        if (updatedOrder?.referralCode) {
+          createCommissionForOrder(updatedOrder, app).catch((e) =>
+            app.log.warn('Commission error in callback:', e.message)
+          );
+        }
+
+        if (redis && redis.status === 'ready') {
+          redis.del('admin:dashboard-stats').catch(() => {});
+        }
+
+        const successRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
+        return reply.status(303).redirect(successRedirect);
+      } catch (error) {
+        app.log.error('Razorpay callback error:', error);
+        return reply.status(303).redirect(`${clientUrl}/?payment_callback=1&status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
+      }
+    }
+  });
+
+  // 7. GET /api/payment/download-paid-order/:orderId
+  // Zero-click auto-download endpoint for verified paid orders
+  app.get('/api/payment/download-paid-order/:orderId', async (request, reply) => {
+    const { orderId } = request.params;
+    try {
+      if (!orderId) {
+        return reply.status(400).send({ error: 'Order ID is required' });
+      }
+
+      let order = await prisma.order.findFirst({
+        where: {
+          OR: [
+            { razorpayOrderId: orderId },
+            { id: orderId },
+          ],
+        },
+      });
+
+      if (!order) {
+        return reply.status(404).send({ error: 'Order not found' });
+      }
+
+      // Zero-Failure Safety Net: If order is not marked paid yet, check Razorpay directly
+      if (order.status !== 'paid' && order.razorpayOrderId) {
+        try {
+          const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
+          const keySecret = process.env.RAZORPAY_KEY_SECRET;
+          if (keyId && keySecret) {
+            const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
+            const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
+            const capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            if (capturedPayment) {
+              order = await prisma.order.update({
+                where: { id: order.id },
+                data: {
+                  status: 'paid',
+                  razorpayPaymentId: capturedPayment.id,
+                },
+              });
+            }
+          }
+        } catch (fetchErr) {
+          app.log.warn('Auto-verify check error:', fetchErr.message);
+        }
+      }
+
+      if (order.status !== 'paid') {
+        return reply.status(402).send({ error: 'Order payment has not been completed' });
+      }
+
+      let snapshot = null;
+
+      // 1. Try Redis cache first
+      if (redis && redis.status === 'ready') {
+        const cached = await redis.get(`snapshot:${order.razorpayOrderId}`).catch(() => null);
+        if (cached) {
+          try {
+            snapshot = JSON.parse(cached);
+          } catch {}
+        }
+      }
+
+      // 2. Query PostgreSQL
+      if (!snapshot) {
+        snapshot = await prisma.downloadSnapshot.findFirst({
+          where: {
+            OR: [
+              { orderId: order.razorpayOrderId },
+              { orderId: order.id },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+
+      // 3. Fallback: match by customerName
+      if (!snapshot && order.customerName) {
+        snapshot = await prisma.downloadSnapshot.findFirst({
+          where: {
+            name: order.customerName,
+            createdAt: {
+              gte: new Date(order.createdAt.getTime() - 24 * 60 * 60 * 1000),
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+
+      if (!snapshot || !snapshot.renderedHtml) {
+        return reply.status(404).send({
+          error: 'Document snapshot not found or expired. Please contact support.',
+        });
+      }
+
+      const format = (order.format || snapshot.format || 'PDF').toUpperCase();
+      const cleanName = (snapshot.name || order.customerName || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
+
+      // 1. PDF format
+      if (format === 'PDF') {
+        const fileName = `${cleanName}.pdf`;
+        const pdfBuffer = await renderHtmlToVectorPdf(snapshot.renderedHtml, { fileName });
+        const contentDisposition = getContentDisposition(fileName, 'biodata', '.pdf');
+
+        return reply
+          .header('Content-Type', 'application/pdf')
+          .header('Content-Disposition', contentDisposition)
+          .header('Content-Length', pdfBuffer.length)
+          .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+          .send(pdfBuffer);
+      }
+
+      // 2. Image format (PNG or JPG)
+      if (format === 'PNG' || format === 'JPG' || format === 'JPEG') {
+        const ext = format === 'PNG' ? 'png' : 'jpg';
+        const fileName = `${cleanName}.${ext}`;
+        const result = await renderHtmlToImage(snapshot.renderedHtml, ext, {
+          cleanName,
+          totalPages: 1,
+        });
+        const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+        const contentDisposition = getContentDisposition(fileName, 'biodata', `.${ext}`);
+
+        return reply
+          .header('Content-Type', mimeType)
+          .header('Content-Disposition', contentDisposition)
+          .header('Content-Length', result.buffer.length)
+          .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+          .send(result.buffer);
+      }
+
+      // 3. COMBO format
+      if (format === 'COMBO') {
+        const fileName = `${cleanName}_Combo.zip`;
+        const zipBuffer = await renderHtmlToComboZip(snapshot.renderedHtml, { cleanName });
+        const contentDisposition = getContentDisposition(fileName, 'biodata_combo', '.zip');
+
+        return reply
+          .header('Content-Type', 'application/zip')
+          .header('Content-Disposition', contentDisposition)
+          .header('Content-Length', zipBuffer.length)
+          .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+          .send(zipBuffer);
+      }
+
+      return reply.status(400).send({ error: `Unsupported format: ${format}` });
+    } catch (err) {
+      app.log.error('Download paid order error:', err);
+      return reply.status(500).send({ error: 'Failed to generate document for paid order' });
     }
   });
 }

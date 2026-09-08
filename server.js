@@ -1,4 +1,5 @@
 import fastify from 'fastify';
+import querystring from 'querystring';
 import fastifyCors from '@fastify/cors';
 import fastifyCompress from '@fastify/compress';
 import fastifyRateLimit from '@fastify/rate-limit';
@@ -33,6 +34,15 @@ const app = fastify({
   bodyLimit: 50 * 1024 * 1024, // 50MB limit to handle large base64 template images
   keepAliveTimeout: 65000,     // 65s (Cloudflare upstream timeout is 60s)
   headersTimeout: 66000,       // Must be > keepAliveTimeout
+});
+
+// Support application/x-www-form-urlencoded (for Razorpay payment gateway callbacks)
+app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (req, body, done) => {
+  try {
+    done(null, querystring.parse(body));
+  } catch (err) {
+    done(err, undefined);
+  }
 });
 
 // Register Brotli & Gzip Response Compression
