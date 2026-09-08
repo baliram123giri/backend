@@ -131,9 +131,49 @@ export async function uploadToVPS(fileStr, subFolder) {
 
   // Write file to filesystem
   fs.writeFileSync(destFilePath, buffer);
+
+  // If in local Windows development, automatically sync to live VPS so CDN URLs work immediately
+  if (process.platform === "win32") {
+    await syncToRemoteVPS(buffer, normalizedSubFolder, finalFilename);
+  }
   
   // Return the full public URL with domain
   return `https://img.biodata99.com/biodata/${normalizedSubFolder}/${finalFilename}`;
+}
+
+async function syncToRemoteVPS(buffer, subFolder, filename) {
+  try {
+    const { Client } = await import("ssh2");
+    const conn = new Client();
+    await new Promise((resolve) => {
+      conn.on("ready", () => {
+        conn.sftp((err, sftp) => {
+          if (err) { conn.end(); return resolve(); }
+          const remoteDir = `/var/www/biodata99/uploads/biodata/${subFolder}`.replace(/\\/g, "/");
+          conn.exec(`mkdir -p "${remoteDir}"`, () => {
+            const remotePath = `${remoteDir}/${filename}`;
+            const stream = sftp.createWriteStream(remotePath);
+            stream.on("close", () => {
+              conn.exec(`chown www-data:www-data "${remotePath}" && chmod 755 "${remotePath}"`, () => {
+                conn.end();
+                resolve();
+              });
+            });
+            stream.on("error", () => { conn.end(); resolve(); });
+            stream.end(buffer);
+          });
+        });
+      }).on("error", () => resolve()).connect({
+        host: process.env.VPS_HOST || "84.46.249.191",
+        port: 22,
+        username: "root",
+        password: process.env.VPS_PASSWORD || "Mh21ce8818",
+        readyTimeout: 5000,
+      });
+    });
+  } catch (err) {
+    console.warn("[vps-upload] Auto-sync to VPS skipped/failed:", err.message);
+  }
 }
 
 /**

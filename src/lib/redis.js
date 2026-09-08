@@ -10,7 +10,30 @@ const logger = pino(loggerConfig);
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 export let redis = null;
 
+const MAX_L1_ENTRIES = 500;
 const memoryCache = new Map();
+
+function setL1(key, value, ttlSeconds) {
+  const now = Date.now();
+  if (memoryCache.size >= MAX_L1_ENTRIES) {
+    for (const [k, v] of memoryCache.entries()) {
+      if (now >= v.expiry) {
+        memoryCache.delete(k);
+      }
+    }
+    while (memoryCache.size >= MAX_L1_ENTRIES) {
+      const oldestKey = memoryCache.keys().next().value;
+      if (!oldestKey) break;
+      memoryCache.delete(oldestKey);
+    }
+  }
+  // Refresh insertion order for LRU
+  memoryCache.delete(key);
+  memoryCache.set(key, {
+    value,
+    expiry: now + ttlSeconds * 1000,
+  });
+}
 
 export function clearMemoryCache() {
   memoryCache.clear();
@@ -62,6 +85,9 @@ export async function getCachedOrFetch(key, ttlSeconds, fetchFn) {
     const entry = memoryCache.get(key);
     if (Date.now() < entry.expiry) {
       logger.info(`L1 Memory Cache HIT for key: ${key}`);
+      // Refresh LRU position
+      memoryCache.delete(key);
+      memoryCache.set(key, entry);
       return entry.value;
     } else {
       memoryCache.delete(key);
@@ -76,11 +102,8 @@ export async function getCachedOrFetch(key, ttlSeconds, fetchFn) {
       if (cached) {
         logger.info(`L2 Redis Cache HIT for key: ${key}`);
         const parsed = JSON.parse(cached);
-        // Populate L1 Cache
-        memoryCache.set(key, {
-          value: parsed,
-          expiry: Date.now() + ttlSeconds * 1000
-        });
+        // Populate L1 Cache safely bounded
+        setL1(key, parsed, ttlSeconds);
         return parsed;
       }
     } catch (err) {
@@ -93,11 +116,8 @@ export async function getCachedOrFetch(key, ttlSeconds, fetchFn) {
   const result = await fetchFn();
 
   if (result !== null && result !== undefined) {
-    // Populate L1 Cache
-    memoryCache.set(key, {
-      value: result,
-      expiry: Date.now() + ttlSeconds * 1000
-    });
+    // Populate L1 Cache safely bounded
+    setL1(key, result, ttlSeconds);
 
     // Populate L2 Redis Cache
     if (redis && redis.status === 'ready') {

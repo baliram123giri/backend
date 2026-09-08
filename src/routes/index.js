@@ -9,10 +9,14 @@ import publicTemplateRoutes from './templates/index.js';
 import userRoutes from './user/index.js';
 import affiliateRoutes from './affiliate/index.js';
 import blogRoutes from './blog/index.js';
+import pdfRoutes from './pdf/index.js';
 
 export default async function appRoutes(app, options) {
   // 1. Diagnostic / Health routes
   await app.register(diagnosticRoutes);
+
+  // 2. Vector PDF Generation route
+  await app.register(pdfRoutes);
 
   // 2. Admin routes
   await app.register(adminRoutes, { prefix: '/api/admin' });

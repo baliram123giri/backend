@@ -89,31 +89,35 @@ export default async function publicTemplateRoutes(app, options) {
             whereClause.religion = { equals: religion, mode: 'insensitive' };
           }
 
-          // Execute fallback queries in parallel to save database round-trips
-          const [defaultTemplate, latestMatchingTemplate, latestAnyTemplate] = await Promise.all([
-            withRetry(() =>
-              prisma.template.findFirst({
-                where: { ...whereClause, isDefault: true },
-                select: templateSelect,
-              })
-            ),
-            withRetry(() =>
+          // Look for default template first
+          let finalPrimaryTemplate = await withRetry(() =>
+            prisma.template.findFirst({
+              where: { ...whereClause, isDefault: true },
+              select: templateSelect,
+            })
+          );
+
+          // Fallback to latest matching religion if no default
+          if (!finalPrimaryTemplate) {
+            finalPrimaryTemplate = await withRetry(() =>
               prisma.template.findFirst({
                 where: whereClause,
                 orderBy: { createdAt: 'desc' },
                 select: templateSelect,
               })
-            ),
-            withRetry(() =>
+            );
+          }
+
+          // Final fallback to any active template
+          if (!finalPrimaryTemplate) {
+            finalPrimaryTemplate = await withRetry(() =>
               prisma.template.findFirst({
                 where: { active: true },
                 orderBy: { createdAt: 'desc' },
                 select: templateSelect,
               })
-            )
-          ]);
-
-          const finalPrimaryTemplate = defaultTemplate || latestMatchingTemplate || latestAnyTemplate;
+            );
+          }
 
           if (!finalPrimaryTemplate) {
             return { templates: [] };

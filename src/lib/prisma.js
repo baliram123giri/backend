@@ -7,10 +7,11 @@ dotenv.config();
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 20000,
-  max: 20,
+  idleTimeoutMillis: 15000,
+  connectionTimeoutMillis: 10000,
+  max: 10,
   keepAlive: true,
+  statement_timeout: 10000,
 });
 
 const adapter = new PrismaPg(pool);

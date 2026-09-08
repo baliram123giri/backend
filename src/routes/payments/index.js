@@ -280,7 +280,10 @@ export default async function routes(app, options) {
         return update;
       };
 
-      if (isSandbox || razorpay_order_id.startsWith('mock_order_')) {
+      const isProduction = process.env.NODE_ENV === 'production';
+      const allowMock = !isProduction && (isSandbox === true || razorpay_order_id.startsWith('mock_order_'));
+
+      if (allowMock) {
         const contactUpdate = buildContactUpdate(razorpay_email, razorpay_contact);
 
         const updatedOrder = await withRetry(() =>
@@ -311,12 +314,21 @@ export default async function routes(app, options) {
       }
 
       const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+      if (!keySecret) {
+        app.log.error('RAZORPAY_KEY_SECRET is not configured on server');
+        return reply.status(500).send({ error: 'Payment gateway configuration error' });
+      }
+
       const expectedSignature = crypto
         .createHmac('sha256', keySecret)
         .update(`${razorpay_order_id}|${razorpay_payment_id}`)
         .digest('hex');
 
-      const isSignatureValid = expectedSignature === razorpay_signature;
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const signatureBuffer = Buffer.from(razorpay_signature, 'utf8');
+      const isSignatureValid =
+        expectedBuffer.length === signatureBuffer.length &&
+        crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
 
       if (!isSignatureValid) {
         await withRetry(() =>

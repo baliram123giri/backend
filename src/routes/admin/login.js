@@ -3,6 +3,12 @@ import { verifyPassword, signSession } from '../../lib/auth.js';
 
 export default async function loginRoutes(app, options) {
   app.post('/login', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+      },
+    },
     schema: {
       body: {
         type: 'object',

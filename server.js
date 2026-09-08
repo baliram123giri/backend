@@ -1,28 +1,58 @@
 import fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
+import fastifyCompress from '@fastify/compress';
+import fastifyRateLimit from '@fastify/rate-limit';
 import dotenv from 'dotenv';
 import * as Sentry from '@sentry/node';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
 import { loggerConfig } from './src/lib/logger.js';
+import { prisma } from './src/lib/prisma.js';
+import { redis } from './src/lib/redis.js';
+import { closeChromiumBrowser } from './src/services/pdfGenerator.js';
 import appRoutes from './src/routes/index.js';
 
 dotenv.config();
 
-// Initialize Sentry
-Sentry.init({
-  dsn: process.env.SENTRY_DSN || '', // Add SENTRY_DSN to your .env
-  integrations: [
-    nodeProfilingIntegration(),
-  ],
-  tracesSampleRate: 1.0, // Capture 100% of transactions for performance monitoring
-  profilesSampleRate: 1.0,
-  environment: process.env.NODE_ENV || 'development',
-});
+// Initialize Sentry (only when DSN is present to avoid CPU profiling overhead)
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    integrations: [
+      nodeProfilingIntegration(),
+    ],
+    tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+    profilesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
+    environment: process.env.NODE_ENV || 'development',
+  });
+}
 
-// Create Fastify server
+// Create Fastify server with Cloudflare-matched keep-alive timeouts & proxy trust
 const app = fastify({ 
   logger: loggerConfig,
-  bodyLimit: 50 * 1024 * 1024 // 50MB limit to handle large base64 template images
+  trustProxy: true,            // Extracts real client IP from Cloudflare/Nginx X-Forwarded-For
+  bodyLimit: 50 * 1024 * 1024, // 50MB limit to handle large base64 template images
+  keepAliveTimeout: 65000,     // 65s (Cloudflare upstream timeout is 60s)
+  headersTimeout: 66000,       // Must be > keepAliveTimeout
+});
+
+// Register Brotli & Gzip Response Compression
+await app.register(fastifyCompress, {
+  global: true,
+  encodings: ['br', 'gzip', 'deflate'],
+  threshold: 1024,
+});
+
+// Register Global Rate Limiting (120 req/min per IP; Puppeteer endpoints have custom 15/min limit)
+await app.register(fastifyRateLimit, {
+  global: true,
+  max: 120,
+  timeWindow: '1 minute',
+  allowList: ['127.0.0.1', 'localhost'],
+  errorResponseBuilder: (request, context) => ({
+    statusCode: 429,
+    error: 'Too Many Requests',
+    message: `Rate limit exceeded. Please wait ${Math.round(context.ttl / 1000)}s before trying again.`,
+  }),
 });
 
 // Register CORS
@@ -123,3 +153,27 @@ const start = async () => {
 };
 
 start();
+
+// Graceful Process Lifecycle & Zombie Process Prevention
+const gracefulShutdown = async (signal) => {
+  console.log(`[Server] Received ${signal}. Initiating graceful shutdown...`);
+  try {
+    await app.close();
+    console.log('[Server] Fastify HTTP listener closed.');
+    await closeChromiumBrowser();
+    console.log('[Server] Chromium browser instance cleanly terminated.');
+    await prisma.$disconnect().catch(() => {});
+    console.log('[Server] PostgreSQL connection pool disconnected.');
+    if (redis && redis.status === 'ready') {
+      await redis.quit().catch(() => {});
+      console.log('[Server] Redis connection closed.');
+    }
+    process.exit(0);
+  } catch (err) {
+    console.error('[Server] Error during graceful shutdown:', err);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
