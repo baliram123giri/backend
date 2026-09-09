@@ -239,7 +239,7 @@ async function waitForAssets(page) {
         await document.fonts.ready;
       }
 
-      // 2. Wait for all images to fully load and decode
+      // 2. Wait for all images to fully load and decode naturally
       const images = Array.from(document.querySelectorAll('img'));
       await Promise.all(
         images.map((img) => {
@@ -371,6 +371,8 @@ export async function renderHtmlToVectorPdf(fullHtml, options = {}) {
     browser = await getChromiumBrowser();
     context = await browser.createBrowserContext();
     page = await context.newPage();
+    page.setDefaultTimeout(180000);
+    page.setDefaultNavigationTimeout(180000);
     await setupPageSecurity(page);
 
     await page.setViewport({
@@ -382,7 +384,7 @@ export async function renderHtmlToVectorPdf(fullHtml, options = {}) {
     const normalizedHtml = prepareNormalizedHtml(fullHtml);
     await page.setContent(normalizedHtml, {
       waitUntil: ['load', 'domcontentloaded'],
-      timeout: 8000,
+      timeout: 180000,
     });
 
     await waitForAssets(page);
@@ -428,6 +430,8 @@ export async function renderHtmlToComboZip(fullHtml, options = {}) {
     browser = await getChromiumBrowser();
     context = await browser.createBrowserContext();
     page = await context.newPage();
+    page.setDefaultTimeout(180000);
+    page.setDefaultNavigationTimeout(180000);
     await setupPageSecurity(page);
 
     // 2x device scale for razor-sharp ~192 DPI PNG and JPEG images
@@ -440,7 +444,7 @@ export async function renderHtmlToComboZip(fullHtml, options = {}) {
     const normalizedHtml = prepareNormalizedHtml(fullHtml);
     await page.setContent(normalizedHtml, {
       waitUntil: ['load', 'domcontentloaded'],
-      timeout: 8000,
+      timeout: 180000,
     });
 
     await waitForAssets(page);
@@ -510,6 +514,8 @@ export async function renderHtmlToImage(fullHtml, format = 'png', options = {}) 
     browser = await getChromiumBrowser();
     context = await browser.createBrowserContext();
     page = await context.newPage();
+    page.setDefaultTimeout(180000);
+    page.setDefaultNavigationTimeout(180000);
     await setupPageSecurity(page);
 
     const isJpeg = format.toLowerCase() === 'jpg' || format.toLowerCase() === 'jpeg';
@@ -525,7 +531,7 @@ export async function renderHtmlToImage(fullHtml, format = 'png', options = {}) 
     const normalizedHtml = prepareNormalizedHtml(fullHtml);
     await page.setContent(normalizedHtml, {
       waitUntil: ['load', 'domcontentloaded'],
-      timeout: 8000,
+      timeout: 180000,
     });
 
     await waitForAssets(page);
