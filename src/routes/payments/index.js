@@ -675,20 +675,36 @@ export default async function routes(app, options) {
         });
       }
 
-      if (!snapshot || !snapshot.renderedHtml) {
+      const bodyMatch = snapshot.renderedHtml?.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const bodyContent = bodyMatch ? bodyMatch[1].trim() : '';
+      if (!snapshot || !snapshot.renderedHtml || !bodyContent) {
+        app.log.warn(`[Download Paid Order] Empty snapshot body detected for order: ${order.razorpayOrderId || order.id}`);
         return reply.status(404).send({
-          error: 'Document snapshot not found or expired. Please contact support.',
+          error: 'Document snapshot data is incomplete. Please contact support.',
         });
       }
 
       const format = (order.format || snapshot.format || 'PDF').toUpperCase();
       const cleanName = (snapshot.name || order.customerName || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
 
+      // Mark order as successfully downloaded ONLY when the network stream completes cleanly
+      const markSuccessOnFinish = () => {
+        if (reply.raw) {
+          reply.raw.on('finish', () => {
+            prisma.order.update({
+              where: { id: order.id },
+              data: { downloadStatus: 'success' },
+            }).catch((err) => app.log.warn('Failed to update downloadStatus on finish:', err.message));
+          });
+        }
+      };
+
       // 1. PDF format
       if (format === 'PDF') {
         const fileName = `${cleanName}.pdf`;
         const pdfBuffer = await renderHtmlToVectorPdf(snapshot.renderedHtml, { fileName });
         const contentDisposition = getContentDisposition(fileName, 'biodata', '.pdf');
+        markSuccessOnFinish();
 
         return reply
           .header('Content-Type', 'application/pdf')
@@ -708,6 +724,7 @@ export default async function routes(app, options) {
         });
         const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
         const contentDisposition = getContentDisposition(fileName, 'biodata', `.${ext}`);
+        markSuccessOnFinish();
 
         return reply
           .header('Content-Type', mimeType)
@@ -722,6 +739,7 @@ export default async function routes(app, options) {
         const fileName = `${cleanName}_Combo.zip`;
         const zipBuffer = await renderHtmlToComboZip(snapshot.renderedHtml, { cleanName });
         const contentDisposition = getContentDisposition(fileName, 'biodata_combo', '.zip');
+        markSuccessOnFinish();
 
         return reply
           .header('Content-Type', 'application/zip')

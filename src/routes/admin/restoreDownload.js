@@ -133,6 +133,27 @@ export default async function restoreDownloadRoutes(app, options) {
         });
       }
 
+      const bodyMatch = snapshot.renderedHtml?.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const bodyContent = bodyMatch ? bodyMatch[1].trim() : '';
+      if (!snapshot.renderedHtml || !bodyContent) {
+        return reply.status(404).send({
+          error: 'Generation snapshot HTML is empty or corrupted. Please contact support.',
+        });
+      }
+
+      if (snapshot.orderId) {
+        prisma.order.updateMany({
+          where: {
+            OR: [
+              { razorpayOrderId: snapshot.orderId },
+              { id: snapshot.orderId },
+            ],
+            status: 'paid',
+          },
+          data: { downloadStatus: 'success' },
+        }).catch(() => {});
+      }
+
       const cleanName = (snapshot.name || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
       const format = (snapshot.format || 'PDF').toUpperCase();
 

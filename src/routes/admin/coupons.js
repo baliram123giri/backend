@@ -3,6 +3,27 @@ import { redis, getCachedOrFetch } from '../../lib/redis.js';
 
 const CACHE_KEY = "admin:coupons";
 
+export function normalizeExpiryDate(val) {
+  if (!val) return null;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (!trimmed) return null;
+    // Pure date: YYYY-MM-DD -> set to 23:59:59.999 in IST (+05:30)
+    const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      return new Date(`${trimmed}T23:59:59.999+05:30`);
+    }
+    // ISO string with midnight 00:00:00 (e.g. from frontend new Date('YYYY-MM-DD').toISOString())
+    const isoMidnightMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})T00:00:00/);
+    if (isoMidnightMatch) {
+      const datePart = isoMidnightMatch[0].substring(0, 10);
+      return new Date(`${datePart}T23:59:59.999+05:30`);
+    }
+  }
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export default async function adminCouponsRoutes(app, options) {
   // GET all coupons
   app.get('/coupons', async (request, reply) => {
@@ -52,7 +73,7 @@ export default async function adminCouponsRoutes(app, options) {
           active: active !== undefined ? active : true,
           isPublic: isPublic !== undefined ? isPublic : true,
           maxUses: maxUses ? parseInt(maxUses) : null,
-          expiresAt: expiresAt ? new Date(expiresAt) : null,
+          expiresAt: normalizeExpiryDate(expiresAt),
         }
       });
 
@@ -85,7 +106,7 @@ export default async function adminCouponsRoutes(app, options) {
         if (discountType !== undefined) dataToUpdate.discountType = discountType;
         if (discountValue !== undefined) dataToUpdate.discountValue = parseFloat(discountValue);
         if (maxUses !== undefined) dataToUpdate.maxUses = maxUses ? parseInt(maxUses) : null;
-        if (expiresAt !== undefined) dataToUpdate.expiresAt = expiresAt ? new Date(expiresAt) : null;
+        if (expiresAt !== undefined) dataToUpdate.expiresAt = normalizeExpiryDate(expiresAt);
 
         const updated = await prisma.coupon.update({
           where: { id },

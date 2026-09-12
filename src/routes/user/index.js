@@ -345,30 +345,27 @@ app.post('/api/feedback', {
 // -------------------------------------------------------------
 app.post('/api/contact', async (request, reply) => {
   try {
-    const { name, email, topic, message } = request.body;
+    const { name, email, topic, message } = request.body || {};
 
     if (!name || !email || !topic || !message) {
-      reply.status(400).send({ error: 'All fields are required. Please check your inputs and try again.' });
-      return;
+      return reply.status(400).send({ error: 'All fields are required. Please check your inputs and try again.' });
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      reply.status(400).send({ error: 'Please enter a valid email address.' });
-      return;
+      return reply.status(400).send({ error: 'Please enter a valid email address.' });
     }
 
-    if (message.trim().length < 10) {
-      reply.status(400).send({ error: 'Message must be at least 10 characters long.' });
-      return;
+    if (message.trim().length < 5) {
+      return reply.status(400).send({ error: 'Message must be at least 5 characters long.' });
     }
 
     const smtpPass = process.env.EMAIL_PASS;
     if (!smtpPass) {
       console.warn('SMTP Password (EMAIL_PASS) is not configured in env. Skipping real email dispatch.');
-      return {
+      return reply.send({
         success: true,
         message: "Message received locally! (SMTP credentials not configured in env, email skipped)",
-      };
+      });
     }
 
     const smtpHost = process.env.EMAIL_HOST || 'smtp.hostinger.com';
@@ -379,8 +376,8 @@ app.post('/api/contact', async (request, reply) => {
       host: smtpHost,
       port: smtpPort,
       secure: smtpPort === 465,
-      debug: true,
-      logger: true,
+      debug: false,
+      logger: false,
       auth: {
         user: smtpUser,
         pass: smtpPass,
@@ -393,6 +390,7 @@ app.post('/api/contact', async (request, reply) => {
     const adminMailOptions = {
       from: `"biodata99.com Contact" <${smtpUser}>`,
       to: smtpUser,
+      replyTo: email,
       subject: `[${topic}] New Contact Inquiry from ${name}`,
       html: `
         <div style="font-family: 'Inter', sans-serif; background-color: #fdf8f4; padding: 30px; border-radius: 12px; border: 1px solid #C9A84C; max-width: 600px; margin: 0 auto; color: #333333;">
@@ -464,15 +462,20 @@ app.post('/api/contact', async (request, reply) => {
       `,
     };
 
-    await Promise.all([
-      transporter.sendMail(adminMailOptions),
-      transporter.sendMail(userMailOptions),
-    ]);
+    try {
+      await transporter.sendMail(adminMailOptions);
+      transporter.sendMail(userMailOptions).catch((uErr) => {
+        app.log.warn('User confirmation email copy failed:', uErr.message);
+      });
+    } catch (sendErr) {
+      app.log.error('Contact Form SMTP Dispatch Error:', sendErr);
+      return reply.status(500).send({ error: 'Failed to send message. Please try again or email support@biodata99.com directly.' });
+    }
 
-    return {
+    return reply.send({
       success: true,
-      message: "Your message has been delivered successfully! We've sent a confirmation email to you.",
-    };
+      message: "Your message has been delivered successfully! Our support team will get back to you shortly.",
+    });
   } catch (error) {
     app.log.error('Contact Form SMTP Dispatch Error:', error);
     reply.status(500).send({ error: 'Failed to dispatch email inquiry. Please try again or email support@biodata99.com directly.' });
