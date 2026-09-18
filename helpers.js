@@ -91,6 +91,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     frame = {
       type: "image",
       urlTemplate: dbTpl.frameUrlTemplate || "",
+      page2UrlTemplate: dbTpl.page2FrameUrlTemplate || "",
       bgColor: dbTpl.frameBgColor || "#ffffff",
     };
   } else if (dbTpl.frameType === "svg") {
@@ -159,6 +160,7 @@ export function mapDbTemplateToConfig(dbTpl) {
   return sanitizeTemplateConfig({
     id: dbTpl.id,
     name: dbTpl.name,
+    page2FrameUrlTemplate: dbTpl.page2FrameUrlTemplate || undefined,
     description: dbTpl.description || "",
     defaultPrimary: dbTpl.defaultPrimary,
     defaultSecondary: dbTpl.defaultSecondary,
@@ -168,6 +170,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     defaultPaddingTop: dbTpl.defaultPaddingTop ?? undefined,
     defaultPaddingRight: dbTpl.defaultPaddingRight ?? undefined,
     defaultPaddingLeft: dbTpl.defaultPaddingLeft ?? undefined,
+    page2PaddingTop: dbTpl.page2PaddingTop ?? undefined,
     photo: {
       x: dbTpl.photoX ?? 430,
       y: dbTpl.photoY ?? 100,

@@ -1,7 +1,31 @@
 import puppeteer from 'puppeteer';
 import JSZip from 'jszip';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { isPrivateOrLocalHost } from '../lib/ssrf.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const candidatePublicDirs = [
+  path.resolve(__dirname, '../../../client/public'),
+  path.resolve(__dirname, '../../../client/dist/client'),
+  path.resolve(process.cwd(), 'client/public'),
+  path.resolve(process.cwd(), '../client/public'),
+];
+
+const mimeMap = {
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.css': 'text/css',
+};
 
 function resolveExecutablePath() {
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -203,8 +227,39 @@ export async function setupPageSecurity(page) {
           return req.abort('accessdenied').catch(() => {});
         }
 
-        // Allow legitimate application assets (frames, stickers, fonts, proxy, uploads)
-        return req.continue().catch(() => {});
+        // 1a. Directly fulfill local static assets from disk (0ms latency, bypasses browser Sec-Fetch-Site 403)
+        const pathname = decodeURIComponent(parsedUrl.pathname);
+        for (const dir of candidatePublicDirs) {
+          const localPath = path.join(dir, pathname);
+          if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+            const ext = path.extname(localPath).toLowerCase();
+            const contentType = mimeMap[ext] || 'application/octet-stream';
+            return req.respond({
+              status: 200,
+              contentType,
+              headers: { 'Access-Control-Allow-Origin': '*' },
+              body: fs.readFileSync(localPath),
+            }).catch(() => {});
+          }
+        }
+
+        // 1b. Fallback: Fetch via Node's native fetch (bypasses browser Sec-Fetch-Site & CORS restrictions)
+        fetch(urlStr).then(async (res) => {
+          if (res.ok) {
+            const buffer = Buffer.from(await res.arrayBuffer());
+            const contentType = res.headers.get('content-type') || 'application/octet-stream';
+            return req.respond({
+              status: res.status,
+              contentType,
+              headers: { 'Access-Control-Allow-Origin': '*' },
+              body: buffer,
+            }).catch(() => {});
+          }
+          return req.continue().catch(() => {});
+        }).catch(() => {
+          req.continue().catch(() => {});
+        });
+        return;
       }
 
       // 2. Block internal / private / cloud-metadata network requests (prevents SSRF)

@@ -75,6 +75,7 @@ model Template {
   defaultPaddingTop      Int?
   defaultPaddingRight    Int?
   defaultPaddingLeft     Int?
+  page2PaddingTop        Int?
   defaultFontSize        Int?
   photoX                 Int      @default(390)
   photoY                 Int      @default(100)
@@ -84,6 +85,7 @@ model Template {
   photoShowBorder        Boolean? @default(true)
   frameType              String   @default("image") // "image", "svg", "gradient", "custom"
   frameUrlTemplate       String?
+  page2FrameUrlTemplate  String?
   frameBgType            String?  @default("solid")
   frameBgColor           String?
   frameBgGradientColors  String[]

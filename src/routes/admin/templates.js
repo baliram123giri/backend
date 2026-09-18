@@ -52,6 +52,7 @@ export default async function adminTemplateRoutes(fastify, options) {
             defaultFontSize: true,
             frameType: true,
             frameUrlTemplate: true,
+            page2FrameUrlTemplate: true,
             thumbnailUrl: true,
             previewPhotoUrl: true,
             detailsLayout: true,
@@ -111,11 +112,11 @@ export default async function adminTemplateRoutes(fastify, options) {
         frameOuterStrokeWidth, frameOuterCornerRadius, frameInnerInset,
         frameInnerStrokeWidth, frameInnerCornerRadius, frameHasCornerCurves,
         frameGradientColors, frameBgType, frameBgGradientColors, frameComponentId,
-        frameFile, thumbnailFile, bgConfig, language, detailsLayout, titleShape,
+        frameFile, page2FrameFile, thumbnailFile, bgConfig, language, detailsLayout, titleShape,
         mantraSignPlacement, mantraSignVertical, photoShowBorder, isPremium, price,
         discountPrice, currency, pdfPrice, pdfDiscountPrice, docxPrice, docxDiscountPrice, jpgPrice, jpgDiscountPrice,
         pngPrice, pngDiscountPrice, comboPrice, comboDiscountPrice, previewPhotoFile, previewPhotoUrl,
-        rawInput, religion, isDefault, gender, frameUrlTemplate, thumbnailUrl
+        rawInput, religion, isDefault, gender, frameUrlTemplate, page2FrameUrlTemplate, thumbnailUrl
       } = body;
 
       const missingFields = [];
@@ -138,6 +139,13 @@ export default async function adminTemplateRoutes(fastify, options) {
         finalFrameUrl = await uploadToVPS(frameFile, 'frames');
       } else {
         finalFrameUrl = convertToFullUrl(finalFrameUrl);
+      }
+
+      let finalPage2FrameUrl = page2FrameUrlTemplate || '';
+      if (page2FrameFile) {
+        finalPage2FrameUrl = await uploadToVPS(page2FrameFile, 'frames');
+      } else if (finalPage2FrameUrl) {
+        finalPage2FrameUrl = convertToFullUrl(finalPage2FrameUrl);
       }
 
       let finalThumbnailUrl = thumbnailUrl || '';
@@ -179,6 +187,7 @@ export default async function adminTemplateRoutes(fastify, options) {
           defaultPaddingTop: parseInt(defaultPaddingTop) || null,
           defaultPaddingRight: parseInt(defaultPaddingRight) || null,
           defaultPaddingLeft: parseInt(defaultPaddingLeft) || null,
+          page2PaddingTop: parseInt(page2PaddingTop) || null,
           defaultFontSize: parseInt(defaultFontSize) || null,
           photoX: parseInt(photoX) || 390,
           photoY: parseInt(photoY) || 100,
@@ -190,6 +199,7 @@ export default async function adminTemplateRoutes(fastify, options) {
           frameBgColor: frameBgColor || '#ffffff',
           frameBgGradientColors: frameBgGradientColors || [],
           frameUrlTemplate: finalFrameUrl,
+          page2FrameUrlTemplate: finalPage2FrameUrl || null,
           frameOuterInset: parseInt(frameOuterInset) || null,
           frameOuterStrokeWidth: parseInt(frameOuterStrokeWidth) || null,
           frameOuterCornerRadius: parseInt(frameOuterCornerRadius) || null,
@@ -271,7 +281,7 @@ export default async function adminTemplateRoutes(fastify, options) {
 
       const numericFields = [
         "defaultPadding", "defaultYPadding", "defaultPaddingTop", "defaultPaddingRight",
-        "defaultPaddingLeft", "defaultFontSize", "photoX", "photoY", "photoWidth",
+        "defaultPaddingLeft", "page2PaddingTop", "defaultFontSize", "photoX", "photoY", "photoWidth",
         "photoHeight", "photoCornerRadius", "frameOuterInset", "frameOuterStrokeWidth",
         "frameOuterCornerRadius", "frameInnerInset", "frameInnerStrokeWidth",
         "frameInnerCornerRadius"
@@ -321,6 +331,18 @@ export default async function adminTemplateRoutes(fastify, options) {
         updateData.frameUrlTemplate = await uploadToVPS(body.frameFile, 'frames');
       } else if (body.frameUrlTemplate !== undefined) {
         updateData.frameUrlTemplate = convertToFullUrl(body.frameUrlTemplate);
+      }
+
+      // Page 2 frame upload
+      if (body.page2FrameFile) {
+        if (existing.page2FrameUrlTemplate) {
+          await deleteFromVPS(existing.page2FrameUrlTemplate);
+        }
+        updateData.page2FrameUrlTemplate = await uploadToVPS(body.page2FrameFile, 'frames');
+      } else if (body.page2FrameUrlTemplate !== undefined) {
+        updateData.page2FrameUrlTemplate = body.page2FrameUrlTemplate
+          ? convertToFullUrl(body.page2FrameUrlTemplate)
+          : null;
       }
 
       if (body.thumbnailFile) {
@@ -407,6 +429,7 @@ export default async function adminTemplateRoutes(fastify, options) {
 
       // Clean up assets
       if (existing.frameUrlTemplate) await deleteFromVPS(existing.frameUrlTemplate);
+      if (existing.page2FrameUrlTemplate) await deleteFromVPS(existing.page2FrameUrlTemplate);
       if (existing.thumbnailUrl) await deleteFromVPS(existing.thumbnailUrl);
       if (existing.previewPhotoUrl) await deleteFromVPS(existing.previewPhotoUrl);
       if (existing.bgConfig) {
