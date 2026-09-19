@@ -157,6 +157,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     }
   }
 
+
   return sanitizeTemplateConfig({
     id: dbTpl.id,
     name: dbTpl.name,
