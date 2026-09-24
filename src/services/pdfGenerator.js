@@ -339,7 +339,7 @@ const GUARANTEE_CSS = `
     height: 297mm !important;
     position: relative !important;
     overflow: hidden !important;
-    background: white !important;
+    background: transparent !important; /* Set dynamically by propagateTemplateBackground() */
     page-break-after: always !important;
     break-after: page !important;
   }
@@ -395,116 +395,69 @@ const GUARANTEE_CSS = `
   .z-40 { z-index: 40 !important; }
   .z-50 { z-index: 50 !important; }
 
-  /* ── Comprehensive sub-pixel hairline gap fix ──────────────────────────────
-     ROOT CAUSE: Chromium's PDF rasterizer uses floating-point math. When a
-     CSS transform:scale() container is converted to PDF vectors, the page
-     container boundary and the inner scaled content can have a fractional-pixel
-     gap at any edge, exposing the white html/body background as a hairline.
+  /* ── Sub-pixel hairline gap fix ─────────────────────────────────────────────
+     ROOT CAUSE: Chromium's PDF rasterizer uses floating-point math when scaling
+     the transform:scale() container. The .__bppage-container__ background
+     (white) shows through as a hairline at the edges of the scaled content.
 
-     STRATEGY — Four independent layers of defence:
-
-     1. BACKGROUND PROPAGATION (JS injected post-load): The actual template
-        background color/gradient is extracted and applied to html, body, and
-        .__bppage-container__ so any sub-pixel gap is the same color as content.
-
-     2. SCALE CONTAINER BLEED: .__bppage-scale__ bleeds 2px beyond the
-        container clip boundary on every side via negative margin + expanded
-        size. overflow:hidden on .__bppage-container__ clips cleanly in browser
-        but the PDF rasterizer never sees a gap.
-
-     3. GPU COMPOSITING ISOLATION: Gradient-bearing elements receive
-        will-change:transform + backface-visibility:hidden, promoting them to
-        isolated GPU compositing layers and preventing tile-boundary hairlines.
-
-     4. INNER DIV BLEED (JS): The first child of .__bppage-scale__ gets a
-        -1px margin + 1px padding on all sides so it physically overlaps the
-        2px bleed region with actual background content.
+     CORRECT FIX:
+     • Make .__bppage-container__ background TRANSPARENT (not white). This means
+       any fractional-pixel gap at the container edge shows html/body background
+       instead of white — which we set to match the template via page.evaluate().
+     • Keep .__bppage-scale__ dimensions exactly as 595x842 with NO padding/margin
+       changes (those would break container-query cqw measurements).
+     • DO NOT add transform:translateZ(0) to gradient children — that creates
+       new stacking contexts that break Chromium's PDF vector rendering pipeline.
+     • Background propagation is done via page.evaluate() in the render functions
+       (guaranteed to run before page.pdf()), not via script tags.
   ── */
-
-  /* Layer 2 — Scale container bleed: extend 2px beyond clip on every side */
-  .__bppage-scale__ {
-    margin: -2px !important;
-    width: calc(595px + 4px) !important;
-    height: calc(842px + 4px) !important;
-    padding: 2px !important;
-  }
-
-  /* Layer 3 — GPU compositing isolation for gradient elements */
-  .__bppage-scale__ *[style*="linear-gradient"],
-  .__bppage-scale__ *[style*="radial-gradient"],
-  .__bppage-scale__ *[style*="conic-gradient"] {
-    will-change: transform !important;
-    backface-visibility: hidden !important;
-    -webkit-backface-visibility: hidden !important;
-    transform: translateZ(0) !important;
-    isolation: isolate !important;
-  }
-  .__bppage-scale__ [class*="bg-gradient"],
-  .__bppage-scale__ [class*="from-"],
-  .__bppage-scale__ [class*="via-"],
-  .__bppage-scale__ [class*="to-"] {
-    will-change: transform !important;
-    backface-visibility: hidden !important;
-    -webkit-backface-visibility: hidden !important;
-    transform: translateZ(0) !important;
-    isolation: isolate !important;
-  }
 `;
 
-// Layer 1 + 4 — JS injected after content loads to propagate the template
-// background to html/body/container (Layer 1) and bleed the inner div (Layer 4).
-const BACKGROUND_PROPAGATION_SCRIPT = `
-(function() {
+
+async function propagateTemplateBackground(page) {
+  // Reads the actual template background color/gradient from the rendered DOM
+  // and applies it to html, body, and .__bppage-container__ so any sub-pixel
+  // gap caused by Chromium's PDF rasterizer floating-point rounding is the
+  // same color as the template, not white.
   try {
-    var containers = document.querySelectorAll('.__bppage-container__');
-    containers.forEach(function(container) {
-      var scaleDiv = container.querySelector('.__bppage-scale__');
-      if (!scaleDiv) return;
+    await page.evaluate(() => {
+      const containers = document.querySelectorAll('.__bppage-container__');
+      containers.forEach((container) => {
+        const scaleDiv = container.querySelector('.__bppage-scale__');
+        if (!scaleDiv) return;
 
-      // Walk the first levels of children to find the element with the
-      // actual template background (background-color or gradient)
-      var bgEl = scaleDiv.firstElementChild || scaleDiv;
-      var bgStyle = window.getComputedStyle(bgEl);
-      var bg = bgEl.style.background || bgEl.style.backgroundColor
-              || bgStyle.background || bgStyle.backgroundColor || '';
+        // Search up to 3 levels deep for the element with the actual bg
+        let bg = '';
+        const candidates = [
+          scaleDiv.firstElementChild,
+          scaleDiv.firstElementChild?.firstElementChild,
+          scaleDiv,
+        ].filter(Boolean);
 
-      // If inner div has no background, try its first child
-      if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
-        var child = bgEl.firstElementChild;
-        if (child) {
-          var cs = window.getComputedStyle(child);
-          bg = child.style.background || child.style.backgroundColor
-             || cs.background || cs.backgroundColor || '';
+        for (const el of candidates) {
+          const cs = window.getComputedStyle(el);
+          const inline = el.style.background || el.style.backgroundColor || '';
+          const computed = cs.background || cs.backgroundColor || '';
+          const candidate = inline || computed;
+          if (candidate && candidate !== 'rgba(0, 0, 0, 0)' && candidate !== 'transparent') {
+            bg = candidate;
+            break;
+          }
         }
-      }
 
-      // Apply the discovered background to html, body, and the container so
-      // any hairline gap between them is filled with the matching color/gradient.
-      if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+        if (!bg) return; // No background found — leave defaults
+
+        // Propagate to all ancestor containers so no white gap can show through
         document.documentElement.style.setProperty('background', bg, 'important');
         document.body.style.setProperty('background', bg, 'important');
         container.style.setProperty('background', bg, 'important');
-      }
-
-      // Layer 4: bleed the inner div by -1px on all sides so it physically
-      // fills into the 2px bleed zone introduced by Layer 2.
-      var innerDiv = scaleDiv.querySelector('div');
-      if (innerDiv) {
-        innerDiv.style.setProperty('margin', '-1px', 'important');
-        innerDiv.style.setProperty('padding', '1px', 'important');
-        innerDiv.style.setProperty('width', 'calc(100% + 2px)', 'important');
-        innerDiv.style.setProperty('height', 'calc(100% + 2px)', 'important');
-        // Ensure the inner bleed div has the same background too
-        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
-          if (!innerDiv.style.background && !innerDiv.style.backgroundColor) {
-            innerDiv.style.setProperty('background', bg, 'important');
-          }
-        }
-      }
+      });
     });
-  } catch(e) {}
-})();
-`;
+  } catch (err) {
+    // Non-fatal — proceed with PDF generation even if propagation fails
+    console.warn('[PDF Generator] Background propagation skipped:', err.message);
+  }
+}
 
 export function prepareNormalizedHtml(fullHtml) {
   let normalizedHtml = fullHtml || '';
@@ -517,17 +470,6 @@ export function prepareNormalizedHtml(fullHtml) {
     normalizedHtml = normalizedHtml.replace('</head>', `<style>${GUARANTEE_CSS}</style></head>`);
   } else {
     normalizedHtml = `<style>${GUARANTEE_CSS}</style>` + normalizedHtml;
-  }
-
-  // Inject the background propagation + inner-div bleed script just before </body>
-  // so it runs after all elements are in the DOM.
-  if (normalizedHtml.includes('</body>')) {
-    normalizedHtml = normalizedHtml.replace(
-      /<\/body>/i,
-      `<script>${BACKGROUND_PROPAGATION_SCRIPT}</script></body>`
-    );
-  } else {
-    normalizedHtml = normalizedHtml + `<script>${BACKGROUND_PROPAGATION_SCRIPT}</script>`;
   }
 
   return normalizedHtml;
@@ -565,7 +507,8 @@ export async function renderHtmlToVectorPdf(fullHtml, options = {}) {
     });
 
     await waitForAssets(page);
-    await new Promise((r) => setTimeout(r, 60));
+    await propagateTemplateBackground(page);
+    await new Promise((r) => setTimeout(r, 150)); // Settle after background propagation
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
@@ -625,7 +568,8 @@ export async function renderHtmlToComboZip(fullHtml, options = {}) {
     });
 
     await waitForAssets(page);
-    await new Promise((r) => setTimeout(r, 60));
+    await propagateTemplateBackground(page);
+    await new Promise((r) => setTimeout(r, 150)); // Settle after background propagation
 
     // 1. True Vector PDF
     const pdfBuffer = await page.pdf({
@@ -712,7 +656,8 @@ export async function renderHtmlToImage(fullHtml, format = 'png', options = {}) 
     });
 
     await waitForAssets(page);
-    await new Promise((r) => setTimeout(r, 60));
+    await propagateTemplateBackground(page);
+    await new Promise((r) => setTimeout(r, 150)); // Settle after background propagation
 
     // Multi-page bundle as ZIP: captures one A4 page at a time without inflating viewport
     if (pagesCount > 1 && bundleZip) {
