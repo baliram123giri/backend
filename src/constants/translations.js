@@ -56,8 +56,7 @@ export function translateDynamicOption(opt, t, fieldId) {
   const isContactField = fieldId === "mobileNumber" ||
     fieldId === "email" ||
     fieldId === "residentialAddress" ||
-    fieldId === "address" ||
-    fieldId === "companyLogo";
+    fieldId === "address";
 
   if (!isContactField) {
     const numeralMaps = {

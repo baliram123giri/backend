@@ -29,7 +29,6 @@ export const defaultBiodataValues = {
     { id: "occupation", label: "Occupation/Job", value: "", type: "select", options: ["Software Engineer", "Doctor", "Teacher / Professor", "Government Job", "Business", "Self Employed", "Banker", "CA / Accountant", "Lawyer", "Engineer (Non-IT)", "Defense / Police", "Private Job", "Not Working", "Other"], isDefault: true },
     { id: "annualIncome", label: "Annual Income", value: "", type: "text", isDefault: true },
     { id: "companyName", label: "Company Name", value: "", type: "company", isDefault: true },
-    { id: "companyLogo", label: "Company Logo", value: "", type: "hidden", isDefault: false },
   ],
   familyDetails: [
     { id: "fatherName", label: "Father's Name", value: "", type: "text", isDefault: true },
