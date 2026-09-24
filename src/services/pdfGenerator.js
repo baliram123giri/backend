@@ -394,6 +394,32 @@ const GUARANTEE_CSS = `
   .z-30 { z-index: 30 !important; }
   .z-40 { z-index: 40 !important; }
   .z-50 { z-index: 50 !important; }
+
+  /* ── Sub-pixel hairline gap fix ────────────────────────────────────────────
+     Problem: PDF viewers (Chrome, Acrobat) rasterize vector gradients at low
+     zoom levels (e.g. 33%) using floating-point math. Adjacent gradient shapes
+     that share the same Y coordinate get a 1px gap when the viewer rounds
+     fractional pixel boundaries in opposite directions, exposing the white page
+     background as a hairline between sections.
+
+     Fix: Extend every gradient-bearing element 1px downward (margin-bottom: -1px)
+     so it overlaps its neighbour, and compensate with padding-bottom: 1px so
+     the element's own content is never clipped. This makes the overlap invisible
+     at normal zoom but eliminates any gap the viewer's rasterizer can produce.
+  ── */
+  .__bppage-scale__ *[style*="linear-gradient"],
+  .__bppage-scale__ *[style*="radial-gradient"],
+  .__bppage-scale__ *[style*="conic-gradient"] {
+    margin-bottom: -1px !important;
+    padding-bottom: 1px !important;
+  }
+  .__bppage-scale__ [class*="bg-gradient"],
+  .__bppage-scale__ [class*="from-"],
+  .__bppage-scale__ [class*="via-"],
+  .__bppage-scale__ [class*="to-"] {
+    margin-bottom: -1px !important;
+    padding-bottom: 1px !important;
+  }
 `;
 
 export function prepareNormalizedHtml(fullHtml) {
