@@ -56,3 +56,10 @@ prisma/migrations/*.db
 generated_pdfs/
 real_test_pdfs/
 real_combo_packs/
+
+# Scratch & temporary scripts
+scratch*
+sync_*.js
+check_*.js
+*.tmp
+

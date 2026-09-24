@@ -139,6 +139,8 @@ export function mapDbTemplateToConfig(dbTpl) {
           height: typeof parsed.height === "number" ? parsed.height : 842,
           opacity: typeof parsed.opacity === "number" ? parsed.opacity : 1.0,
           fontFamily: parsed.fontFamily || undefined,
+          headingFont: parsed.headingFont || undefined,
+          sectionFont: parsed.sectionFont || undefined,
           fontWeight: parsed.fontWeight || undefined,
           fontSize: typeof parsed.fontSize === "number" ? parsed.fontSize : undefined,
           alignment: parsed.alignment || undefined,
@@ -150,6 +152,9 @@ export function mapDbTemplateToConfig(dbTpl) {
           frameImageWidth: parsed.frameImageWidth,
           frameImageHeight: parsed.frameImageHeight,
           enableSvgTint: parsed.enableSvgTint,
+          mantraSignUrl: parsed.mantraSignUrl || undefined,
+          headerSymbol: parsed.headerSymbol !== undefined ? parsed.headerSymbol : undefined,
+          labelWidth: typeof parsed.labelWidth === "number" ? parsed.labelWidth : undefined,
         };
       }
     } catch (e) {
@@ -171,6 +176,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     defaultPaddingTop: dbTpl.defaultPaddingTop ?? undefined,
     defaultPaddingRight: dbTpl.defaultPaddingRight ?? undefined,
     defaultPaddingLeft: dbTpl.defaultPaddingLeft ?? undefined,
+    defaultPaddingBottom: dbTpl.defaultPaddingBottom ?? (dbTpl.bgConfig ? (typeof dbTpl.bgConfig === 'string' ? JSON.parse(dbTpl.bgConfig) : dbTpl.bgConfig)?.defaultPaddingBottom : undefined) ?? undefined,
     page2PaddingTop: dbTpl.page2PaddingTop ?? undefined,
     photo: {
       x: dbTpl.photoX ?? 430,
@@ -228,6 +234,10 @@ export function sanitizeRawInput(rawInput) {
       if ('familyTitle' in raw) clean.familyTitle = raw.familyTitle;
       if ('contactTitle' in raw) clean.contactTitle = raw.contactTitle;
       if ('headerSymbol' in raw) clean.headerSymbol = raw.headerSymbol;
+      if ('personalDetails' in raw) clean.personalDetails = raw.personalDetails;
+      if ('educationDetails' in raw) clean.educationDetails = raw.educationDetails;
+      if ('familyDetails' in raw) clean.familyDetails = raw.familyDetails;
+      if ('contactDetails' in raw) clean.contactDetails = raw.contactDetails;
       return clean;
     }
     return raw;

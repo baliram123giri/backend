@@ -107,7 +107,7 @@ export default async function adminTemplateRoutes(fastify, options) {
       const {
         name, description, defaultPrimary, defaultSecondary, defaultAccent,
         defaultPadding, defaultYPadding, defaultPaddingTop, defaultPaddingRight,
-        defaultPaddingLeft, defaultFontSize, photoX, photoY, photoWidth, photoHeight,
+        defaultPaddingLeft, page2PaddingTop, defaultFontSize, photoX, photoY, photoWidth, photoHeight,
         photoCornerRadius, frameType, frameBgColor, frameOuterInset,
         frameOuterStrokeWidth, frameOuterCornerRadius, frameInnerInset,
         frameInnerStrokeWidth, frameInnerCornerRadius, frameHasCornerCurves,
