@@ -395,31 +395,115 @@ const GUARANTEE_CSS = `
   .z-40 { z-index: 40 !important; }
   .z-50 { z-index: 50 !important; }
 
-  /* ── Sub-pixel hairline gap fix ────────────────────────────────────────────
-     Problem: PDF viewers (Chrome, Acrobat) rasterize vector gradients at low
-     zoom levels (e.g. 33%) using floating-point math. Adjacent gradient shapes
-     that share the same Y coordinate get a 1px gap when the viewer rounds
-     fractional pixel boundaries in opposite directions, exposing the white page
-     background as a hairline between sections.
+  /* ── Comprehensive sub-pixel hairline gap fix ──────────────────────────────
+     ROOT CAUSE: Chromium's PDF rasterizer uses floating-point math. When a
+     CSS transform:scale() container is converted to PDF vectors, the page
+     container boundary and the inner scaled content can have a fractional-pixel
+     gap at any edge, exposing the white html/body background as a hairline.
 
-     Fix: Extend every gradient-bearing element 1px downward (margin-bottom: -1px)
-     so it overlaps its neighbour, and compensate with padding-bottom: 1px so
-     the element's own content is never clipped. This makes the overlap invisible
-     at normal zoom but eliminates any gap the viewer's rasterizer can produce.
+     STRATEGY — Four independent layers of defence:
+
+     1. BACKGROUND PROPAGATION (JS injected post-load): The actual template
+        background color/gradient is extracted and applied to html, body, and
+        .__bppage-container__ so any sub-pixel gap is the same color as content.
+
+     2. SCALE CONTAINER BLEED: .__bppage-scale__ bleeds 2px beyond the
+        container clip boundary on every side via negative margin + expanded
+        size. overflow:hidden on .__bppage-container__ clips cleanly in browser
+        but the PDF rasterizer never sees a gap.
+
+     3. GPU COMPOSITING ISOLATION: Gradient-bearing elements receive
+        will-change:transform + backface-visibility:hidden, promoting them to
+        isolated GPU compositing layers and preventing tile-boundary hairlines.
+
+     4. INNER DIV BLEED (JS): The first child of .__bppage-scale__ gets a
+        -1px margin + 1px padding on all sides so it physically overlaps the
+        2px bleed region with actual background content.
   ── */
+
+  /* Layer 2 — Scale container bleed: extend 2px beyond clip on every side */
+  .__bppage-scale__ {
+    margin: -2px !important;
+    width: calc(595px + 4px) !important;
+    height: calc(842px + 4px) !important;
+    padding: 2px !important;
+  }
+
+  /* Layer 3 — GPU compositing isolation for gradient elements */
   .__bppage-scale__ *[style*="linear-gradient"],
   .__bppage-scale__ *[style*="radial-gradient"],
   .__bppage-scale__ *[style*="conic-gradient"] {
-    margin-bottom: -1px !important;
-    padding-bottom: 1px !important;
+    will-change: transform !important;
+    backface-visibility: hidden !important;
+    -webkit-backface-visibility: hidden !important;
+    transform: translateZ(0) !important;
+    isolation: isolate !important;
   }
   .__bppage-scale__ [class*="bg-gradient"],
   .__bppage-scale__ [class*="from-"],
   .__bppage-scale__ [class*="via-"],
   .__bppage-scale__ [class*="to-"] {
-    margin-bottom: -1px !important;
-    padding-bottom: 1px !important;
+    will-change: transform !important;
+    backface-visibility: hidden !important;
+    -webkit-backface-visibility: hidden !important;
+    transform: translateZ(0) !important;
+    isolation: isolate !important;
   }
+`;
+
+// Layer 1 + 4 — JS injected after content loads to propagate the template
+// background to html/body/container (Layer 1) and bleed the inner div (Layer 4).
+const BACKGROUND_PROPAGATION_SCRIPT = `
+(function() {
+  try {
+    var containers = document.querySelectorAll('.__bppage-container__');
+    containers.forEach(function(container) {
+      var scaleDiv = container.querySelector('.__bppage-scale__');
+      if (!scaleDiv) return;
+
+      // Walk the first levels of children to find the element with the
+      // actual template background (background-color or gradient)
+      var bgEl = scaleDiv.firstElementChild || scaleDiv;
+      var bgStyle = window.getComputedStyle(bgEl);
+      var bg = bgEl.style.background || bgEl.style.backgroundColor
+              || bgStyle.background || bgStyle.backgroundColor || '';
+
+      // If inner div has no background, try its first child
+      if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+        var child = bgEl.firstElementChild;
+        if (child) {
+          var cs = window.getComputedStyle(child);
+          bg = child.style.background || child.style.backgroundColor
+             || cs.background || cs.backgroundColor || '';
+        }
+      }
+
+      // Apply the discovered background to html, body, and the container so
+      // any hairline gap between them is filled with the matching color/gradient.
+      if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+        document.documentElement.style.setProperty('background', bg, 'important');
+        document.body.style.setProperty('background', bg, 'important');
+        container.style.setProperty('background', bg, 'important');
+      }
+
+      // Layer 4: bleed the inner div by -1px on all sides so it physically
+      // fills into the 2px bleed zone introduced by Layer 2.
+      var innerDiv = scaleDiv.querySelector('div');
+      if (innerDiv) {
+        innerDiv.style.setProperty('margin', '-1px', 'important');
+        innerDiv.style.setProperty('padding', '1px', 'important');
+        innerDiv.style.setProperty('width', 'calc(100% + 2px)', 'important');
+        innerDiv.style.setProperty('height', 'calc(100% + 2px)', 'important');
+        // Ensure the inner bleed div has the same background too
+        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+          if (!innerDiv.style.background && !innerDiv.style.backgroundColor) {
+            innerDiv.style.setProperty('background', bg, 'important');
+          }
+        }
+      }
+    });
+  } catch(e) {}
+})();
 `;
 
 export function prepareNormalizedHtml(fullHtml) {
@@ -434,6 +518,18 @@ export function prepareNormalizedHtml(fullHtml) {
   } else {
     normalizedHtml = `<style>${GUARANTEE_CSS}</style>` + normalizedHtml;
   }
+
+  // Inject the background propagation + inner-div bleed script just before </body>
+  // so it runs after all elements are in the DOM.
+  if (normalizedHtml.includes('</body>')) {
+    normalizedHtml = normalizedHtml.replace(
+      /<\/body>/i,
+      `<script>${BACKGROUND_PROPAGATION_SCRIPT}</script></body>`
+    );
+  } else {
+    normalizedHtml = normalizedHtml + `<script>${BACKGROUND_PROPAGATION_SCRIPT}</script>`;
+  }
+
   return normalizedHtml;
 }
 
