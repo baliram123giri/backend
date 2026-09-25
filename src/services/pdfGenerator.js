@@ -553,16 +553,6 @@ export function prepareNormalizedHtml(fullHtml) {
     normalizedHtml = normalizedHtml.replace(/<\/body>/i, '</div></div></body>');
   }
 
-  // Strip <base href="..."> and rewrite relative URLs to absolute.
-  // In Chromium/Puppeteer, <base href="..."> breaks all SVG fragment references (e.g. fill="url(#id)"),
-  // causing gradient headers/text to render completely blank/invisible.
-  const baseMatch = normalizedHtml.match(/<base\s+[^>]*href=["']([^"']+)["'][^>]*>/i);
-  if (baseMatch) {
-    const baseHref = baseMatch[1].replace(/\/+$/, '');
-    normalizedHtml = normalizedHtml.replace(/(src|href)=["']\/(?!\/)([^"']*)["']/gi, `$1="${baseHref}/$2"`);
-    normalizedHtml = normalizedHtml.replace(/url\((['"]?)\/(?!\/)([^'")]+)\1\)/gi, `url($1${baseHref}/$2$1)`);
-    normalizedHtml = normalizedHtml.replace(/<base\s+[^>]*>/gi, '');
-  }
 
   if (normalizedHtml.includes('</head>')) {
     normalizedHtml = normalizedHtml.replace('</head>', `<style>${GUARANTEE_CSS}</style></head>`);
