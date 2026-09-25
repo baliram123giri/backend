@@ -48,6 +48,7 @@ model DownloadSnapshot {
   createdAt     DateTime  @default(now())
   expiresAt     DateTime  // now + 24 hours
 
+  @@index([orderId])    // fast lookup by Razorpay order ID for download-paid-order endpoint
   @@index([createdAt])
   @@index([expiresAt])
 }
