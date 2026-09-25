@@ -554,6 +554,19 @@ export function prepareNormalizedHtml(fullHtml) {
   }
 
 
+  // Strip <base href="..."> and rewrite relative URLs to absolute.
+  // In Chromium/Puppeteer, <base href="..."> breaks SVG fragment references like fill="url(#titleGrad)",
+  // turning them into external HTTP requests which fail or abort, causing blank text.
+  // Converting all URLs to absolute and stripping <base> allows SVG vector text to resolve in-document without hairlines.
+  const baseMatch = normalizedHtml.match(/<base\s+[^>]*href=["']([^"']+)["'][^>]*>/i);
+  if (baseMatch) {
+    const baseHref = baseMatch[1].replace(/\/+$/, '');
+    normalizedHtml = normalizedHtml
+      .replace(/(src|href)=(["']|&quot;)\/(?!\/)(.*?)\2/gi, `$1=$2${baseHref}/$3$2`)
+      .replace(/url\(\s*(&quot;|['"]?)\/(?!\/)(.*?)\1\s*\)/gi, `url($1${baseHref}/$2$1)`)
+      .replace(/<base\s+[^>]*>/gi, '');
+  }
+
   if (normalizedHtml.includes('</head>')) {
     normalizedHtml = normalizedHtml.replace('</head>', `<style>${GUARANTEE_CSS}</style></head>`);
   } else {
