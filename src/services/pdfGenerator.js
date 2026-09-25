@@ -567,6 +567,26 @@ export function prepareNormalizedHtml(fullHtml) {
       .replace(/<base\s+[^>]*>/gi, '');
   }
 
+  // 1. Sanitize &quot; inside inline style attributes so SVG and CSS rules are not corrupted
+  normalizedHtml = normalizedHtml.replace(/&quot;/g, "'");
+
+  // 2. Prevent Chromium Skia faux-bold glyph collapse on cursive script fonts with gradient text.
+  // Single-weight fonts like Great Vibes/Alex Brush only have 400. Faux-bold 700/800 breaks PDFium gradient text clipping.
+  const scriptRegex = /Great Vibes|Alex Brush|Allura|Rozha One|Yatra One|Tangerine|Parisienne|Cookie|Dancing Script|Satisfy|Kaushan Script|Marck Script/i;
+  normalizedHtml = normalizedHtml
+    .replace(/style="([^"]*)"/gi, (match, content) => {
+      if (scriptRegex.test(content)) {
+        return `style="${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}"`;
+      }
+      return match;
+    })
+    .replace(/style='([^']*)'/gi, (match, content) => {
+      if (scriptRegex.test(content)) {
+        return `style='${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}'`;
+      }
+      return match;
+    });
+
   if (normalizedHtml.includes('</head>')) {
     normalizedHtml = normalizedHtml.replace('</head>', `<style>${GUARANTEE_CSS}</style></head>`);
   } else {
