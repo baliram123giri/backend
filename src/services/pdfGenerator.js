@@ -11,9 +11,14 @@ const __dirname = path.dirname(__filename);
 const candidatePublicDirs = [
   path.resolve(__dirname, '../../../client/public'),
   path.resolve(__dirname, '../../../client/dist/client'),
+  path.resolve(__dirname, '../../../client/dist'),
+  path.resolve(__dirname, '../../../client/.wrangler/tmp/dev-XXXXXX'), // wrangler dev (pattern)
   path.resolve(process.cwd(), 'client/public'),
   path.resolve(process.cwd(), '../client/public'),
+  path.resolve(process.cwd(), 'client/dist/client'),
+  path.resolve(process.cwd(), '../client/dist/client'),
 ];
+
 
 const mimeMap = {
   '.webp': 'image/webp',
@@ -32,7 +37,35 @@ function resolveExecutablePath() {
     return process.env.PUPPETEER_EXECUTABLE_PATH;
   }
 
-  // Auto-detect system-installed Chromium or Google Chrome on Linux VPS
+  // ── Windows: Check for installed Chrome / Chromium ───────────────────────
+  if (process.platform === 'win32') {
+    const winCandidates = [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google\\Chrome\\Application\\chrome.exe')
+        : null,
+      // Chrome SxS (Canary)
+      process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google\\Chrome SxS\\Application\\chrome.exe')
+        : null,
+      // Microsoft Edge as a fallback
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    ].filter(Boolean);
+
+    for (const p of winCandidates) {
+      try {
+        if (fs.existsSync(p)) {
+          return p;
+        }
+      } catch {}
+    }
+    // Let Puppeteer use its bundled Chromium on Windows if none found
+    return undefined;
+  }
+
+  // ── Linux VPS: Auto-detect system-installed Chromium or Google Chrome ─────
   const candidatePaths = [
     '/usr/bin/google-chrome-stable',
     '/usr/bin/google-chrome',
@@ -51,6 +84,7 @@ function resolveExecutablePath() {
 
   return undefined;
 }
+
 
 // ─── Concurrency Semaphore (Protective 2-Slot Capacity) ──────────────────────
 // VPS has 8GB shared with Jenkins, n8n, Postgres, Redis, PM2, etc.
@@ -343,6 +377,16 @@ const GUARANTEE_CSS = `
     page-break-after: always !important;
     break-after: page !important;
   }
+  /* Full-bleed background layer injected by propagateTemplateBackground() to
+     cover sub-pixel hairline gaps at edges of transform:scale() content */
+  .__bppage-bg__ {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    z-index: 0 !important;
+    pointer-events: none !important;
+  }
   .__bppage-scale__ {
     width: 595px !important;
     height: 842px !important;
@@ -353,6 +397,7 @@ const GUARANTEE_CSS = `
     transform-origin: top left !important;
     container-type: inline-size !important;
     container-name: a4 !important;
+    z-index: 1 !important;
   }
   .__bppage-scale__ > div,
   .__bppage-scale__ > div > div {
@@ -416,9 +461,18 @@ const GUARANTEE_CSS = `
 
 async function propagateTemplateBackground(page) {
   // Reads the actual template background color/gradient from the rendered DOM
-  // and applies it to html, body, and .__bppage-container__ so any sub-pixel
-  // gap caused by Chromium's PDF rasterizer floating-point rounding is the
-  // same color as the template, not white.
+  // and applies it via two complementary strategies to eliminate sub-pixel
+  // hairline gaps caused by Chromium's PDF rasterizer floating-point rounding:
+  //
+  // Strategy A — Container background propagation (solid colors):
+  //   Sets html, body, .__bppage-container__ to match the template bg.
+  //   Works perfectly for solid colors.
+  //
+  // Strategy B — Full-bleed __bppage-bg__ layer (gradients + all templates):
+  //   Injects a position:absolute div that fills the ENTIRE .__bppage-container__
+  //   (210mm × 297mm) with the same gradient. Since it's at the container level
+  //   (not inside the scaled transform), it perfectly covers any sub-pixel gap
+  //   at the edges of the scaled content without any color mismatch.
   try {
     await page.evaluate(() => {
       const containers = document.querySelectorAll('.__bppage-container__');
@@ -426,31 +480,64 @@ async function propagateTemplateBackground(page) {
         const scaleDiv = container.querySelector('.__bppage-scale__');
         if (!scaleDiv) return;
 
-        // Search up to 3 levels deep for the element with the actual bg
+        // Search up to 4 levels deep for the element with the actual background
         let bg = '';
         const candidates = [
           scaleDiv.firstElementChild,
           scaleDiv.firstElementChild?.firstElementChild,
+          scaleDiv.firstElementChild?.firstElementChild?.firstElementChild,
           scaleDiv,
         ].filter(Boolean);
 
         for (const el of candidates) {
-          const cs = window.getComputedStyle(el);
+          // Prefer inline style (most reliable — React sets it directly)
           const inline = el.style.background || el.style.backgroundColor || '';
-          const computed = cs.background || cs.backgroundColor || '';
-          const candidate = inline || computed;
-          if (candidate && candidate !== 'rgba(0, 0, 0, 0)' && candidate !== 'transparent') {
-            bg = candidate;
+          if (inline && inline !== 'rgba(0, 0, 0, 0)' && inline !== 'transparent') {
+            bg = inline;
+            break;
+          }
+          // Fall back to computed style
+          const cs = window.getComputedStyle(el);
+          const bgImg = cs.backgroundImage;
+          const bgCol = cs.backgroundColor;
+          // Prefer backgroundImage (catches gradient) over backgroundColor
+          if (bgImg && bgImg !== 'none') {
+            // Compose full background shorthand for gradients
+            bg = bgImg + (bgCol && bgCol !== 'rgba(0, 0, 0, 0)' ? ' ' + bgCol : '');
+            break;
+          }
+          if (bgCol && bgCol !== 'rgba(0, 0, 0, 0)' && bgCol !== 'transparent') {
+            bg = bgCol;
             break;
           }
         }
 
         if (!bg) return; // No background found — leave defaults
 
-        // Propagate to all ancestor containers so no white gap can show through
+        // ── Strategy A: propagate to ancestor containers ──────────────────────
         document.documentElement.style.setProperty('background', bg, 'important');
         document.body.style.setProperty('background', bg, 'important');
         container.style.setProperty('background', bg, 'important');
+
+        // ── Strategy B: inject or update a full-bleed background layer ────────
+        // This div sits BEHIND the scaled content inside .__bppage-container__
+        // and covers the full 210mm×297mm area. Because it is NOT inside the
+        // transform:scale() element, it fills the entire container perfectly
+        // and eliminates any sub-pixel gap at the edges of the scaled content.
+        let bgLayer = container.querySelector('.__bppage-bg__');
+        if (!bgLayer) {
+          bgLayer = document.createElement('div');
+          bgLayer.className = '__bppage-bg__';
+          // Insert before scaleDiv so it renders behind everything
+          container.insertBefore(bgLayer, scaleDiv);
+        }
+        bgLayer.style.setProperty('background', bg, 'important');
+        bgLayer.style.setProperty('position', 'absolute', 'important');
+        bgLayer.style.setProperty('inset', '0', 'important');
+        bgLayer.style.setProperty('width', '100%', 'important');
+        bgLayer.style.setProperty('height', '100%', 'important');
+        bgLayer.style.setProperty('z-index', '0', 'important');
+        bgLayer.style.setProperty('pointer-events', 'none', 'important');
       });
     });
   } catch (err) {
@@ -494,10 +581,11 @@ export async function renderHtmlToVectorPdf(fullHtml, options = {}) {
     page.setDefaultNavigationTimeout(180000);
     await setupPageSecurity(page);
 
+    // 2x device scale ensures crisp ~192 DPI resolution for frames, photos, and embedded raster assets
     await page.setViewport({
       width: 794,
       height: 1123,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: 2,
     });
 
     const normalizedHtml = prepareNormalizedHtml(fullHtml);
