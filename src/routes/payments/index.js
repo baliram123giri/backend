@@ -144,13 +144,10 @@ export default async function routes(app, options) {
             }
             finalAmount = Math.max(0, finalAmount - discountApplied);
 
-            // Update coupon usage count
-            withRetry(() =>
-              prisma.coupon.update({
-                where: { id: couponRecord.id },
-                data: { usedCount: { increment: 1 } },
-              })
-            ).catch((e) => console.error('Failed to increment coupon usedCount:', e));
+            // NOTE: coupon usedCount is intentionally NOT incremented here.
+            // It is only incremented in /verify-payment and /callback routes,
+            // AFTER payment is confirmed as paid. This prevents abandoned-order
+            // coupon exhaustion (Bug fix: increment was incorrectly placed here).
           }
         }
       }
@@ -470,6 +467,17 @@ export default async function routes(app, options) {
         })
       );
 
+      // Increment coupon usedCount HERE (after real payment confirmation) —
+      // not during order creation, to prevent abandoned-order coupon exhaustion
+      if (updatedOrder.couponCode) {
+        withRetry(() =>
+          prisma.coupon.updateMany({
+            where: { code: updatedOrder.couponCode },
+            data: { usedCount: { increment: 1 } },
+          })
+        ).catch((e) => console.error('[verify-payment] Failed to increment coupon usedCount:', e));
+      }
+
       if (updatedOrder.referralCode) {
         await createCommissionForOrder(updatedOrder, app);
       }
@@ -488,10 +496,16 @@ export default async function routes(app, options) {
   // 5. POST /api/razorpay/update-download-status
   app.post('/api/razorpay/update-download-status', async (request, reply) => {
     try {
-      const { orderId, downloadStatus } = request.body || {};
+      const { orderId, downloadStatus, errorMsg } = request.body || {};
 
       if (!orderId || !downloadStatus) {
         return reply.status(400).send({ error: 'Missing required fields' });
+      }
+
+      // Allowlist guard — only accept known status values
+      const VALID_STATUSES = ['success', 'failed', 'pending'];
+      if (!VALID_STATUSES.includes(downloadStatus)) {
+        return reply.status(400).send({ error: `Invalid downloadStatus value: ${downloadStatus}` });
       }
 
       if (orderId === 'sandbox') {
@@ -499,12 +513,18 @@ export default async function routes(app, options) {
       }
 
       try {
+        const updateData = { downloadStatus };
+        // Persist errorMsg so admin dashboard can diagnose failed downloads
+        if (errorMsg && downloadStatus === 'failed') {
+          updateData.downloadErrorMsg = String(errorMsg).slice(0, 500); // cap length
+        }
         await prisma.order.update({
           where: { razorpayOrderId: orderId },
-          data: { downloadStatus },
+          data: updateData,
         });
       } catch (dbErr) {
-        console.warn('DB update of download status failed (Prisma schema might be out of sync):', dbErr);
+        // Graceful degradation — the schema field might not exist yet
+        app.log.warn('[update-download-status] DB update failed:', dbErr.message);
       }
 
       return reply.send({ success: true });
@@ -532,7 +552,8 @@ export default async function routes(app, options) {
 
         if (errorCode || !razorpay_payment_id || !razorpay_signature) {
           const errorMsg = errorDescription || 'Payment was cancelled or could not be completed';
-          const failRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
+          // Redirect to dedicated /payment-processing page for rich UX (step indicators, retry, confetti)
+          const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
           return reply.status(303).redirect(failRedirect);
         }
 
@@ -553,7 +574,7 @@ export default async function routes(app, options) {
         }
 
         if (!isVerified) {
-          const failRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
+          const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
           return reply.status(303).redirect(failRedirect);
         }
 
@@ -568,6 +589,16 @@ export default async function routes(app, options) {
           })
         );
 
+        // Increment coupon usedCount HERE (after real payment confirmation via server callback)
+        if (updatedOrder?.couponCode) {
+          withRetry(() =>
+            prisma.coupon.updateMany({
+              where: { code: updatedOrder.couponCode },
+              data: { usedCount: { increment: 1 } },
+            })
+          ).catch((e) => app.log.warn('[callback] Failed to increment coupon usedCount:', e));
+        }
+
         if (updatedOrder?.referralCode) {
           createCommissionForOrder(updatedOrder, app).catch((e) =>
             app.log.warn('Commission error in callback:', e.message)
@@ -578,11 +609,12 @@ export default async function routes(app, options) {
           redis.del('admin:dashboard-stats').catch(() => {});
         }
 
-        const successRedirect = `${clientUrl}/?payment_callback=1&order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
+        // Redirect to dedicated /payment-processing page — rich animated UX with steps, confetti, retry
+        const successRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
         return reply.status(303).redirect(successRedirect);
       } catch (error) {
         app.log.error('Razorpay callback error:', error);
-        return reply.status(303).redirect(`${clientUrl}/?payment_callback=1&status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
+        return reply.status(303).redirect(`${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
       }
     }
   });
@@ -662,23 +694,35 @@ export default async function routes(app, options) {
         });
       }
 
-      // 3. Fallback: match by customerName
+      // 3. Fallback: match by customerName (only look FORWARD from order creation,
+      //    within a 2-hour window to avoid cross-customer false matches)
       if (!snapshot && order.customerName) {
         snapshot = await prisma.downloadSnapshot.findFirst({
           where: {
             name: order.customerName,
             createdAt: {
-              gte: new Date(order.createdAt.getTime() - 24 * 60 * 60 * 1000),
+              gte: order.createdAt, // snapshots are saved DURING/AFTER checkout, not before
+              lte: new Date(order.createdAt.getTime() + 2 * 60 * 60 * 1000), // 2-hour window
             },
           },
           orderBy: { createdAt: 'desc' },
         });
       }
 
-      const bodyMatch = snapshot.renderedHtml?.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-      const bodyContent = bodyMatch ? bodyMatch[1].trim() : '';
-      if (!snapshot || !snapshot.renderedHtml || !bodyContent) {
-        app.log.warn(`[Download Paid Order] Empty snapshot body detected for order: ${order.razorpayOrderId || order.id}`);
+      // CRITICAL: null-check snapshot BEFORE accessing any property on it.
+      // snapshot.renderedHtml?.match() would throw TypeError if snapshot itself is null.
+      if (!snapshot || !snapshot.renderedHtml) {
+        app.log.warn(`[Download Paid Order] Snapshot not found or empty for order: ${order.razorpayOrderId || order.id}`);
+        return reply.status(404).send({
+          error: 'Document snapshot data is incomplete. Please contact support.',
+        });
+      }
+
+      // Extract body content for validation; fall back to full HTML if no <body> tag present
+      const bodyMatch = snapshot.renderedHtml.match(/<body[^>]*>([\/\s\S]*?)<\/body>/i);
+      const bodyContent = bodyMatch ? bodyMatch[1].trim() : snapshot.renderedHtml.trim();
+      if (!bodyContent) {
+        app.log.warn(`[Download Paid Order] Snapshot body is empty for order: ${order.razorpayOrderId || order.id}`);
         return reply.status(404).send({
           error: 'Document snapshot data is incomplete. Please contact support.',
         });
@@ -785,9 +829,11 @@ async function createCommissionForOrder(order, app) {
       return;
     }
 
-    // Calculate commission dynamically based on format and affiliate's rates
+    // Calculate commission dynamically based on format and affiliate's rates.
+    // NOTE: order.format is stored uppercase ('PDF', 'COMBO', 'PNG' etc.)
+    // — must normalize before comparing to avoid always falling through to normal rate.
     let rate = 30; // default normal rate
-    if (order.format === 'combo') {
+    if ((order.format || '').toUpperCase() === 'COMBO') {
       rate = affiliate.comboCommissionRate != null ? affiliate.comboCommissionRate : 35;
     } else {
       rate = affiliate.commissionRate != null ? affiliate.commissionRate : 30;
