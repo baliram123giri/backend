@@ -1,4 +1,6 @@
 import { renderHtmlToVectorPdf, renderHtmlToImage, renderHtmlToComboZip } from '../../services/pdfGenerator.js';
+import { generateVectorPdfFromDesign } from '../../services/vectorPdf/vectorPdfGenerator.js';
+import { REPRESENTATIVE_TEST_DOCUMENT } from '../../services/vectorPdf/testVectorExport.js';
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import { getContentDisposition } from '../../lib/headerUtils.js';
@@ -14,11 +16,48 @@ const renderRateLimitConfig = {
 };
 
 export default async function pdfRoutes(app, options) {
+  // ── Diagnostic & Benchmark Endpoint for Vector Engine ────────────────────────
+  app.get('/api/test-vector-pdf', async (request, reply) => {
+    const t0 = Date.now();
+    try {
+      const format = (request.query?.format || 'pdf').toLowerCase();
+      const memBefore = process.memoryUsage().heapUsed;
+      const pdfBuffer = await generateVectorPdfFromDesign(REPRESENTATIVE_TEST_DOCUMENT);
+      const memAfter = process.memoryUsage().heapUsed;
+      const durationMs = Date.now() - t0;
+
+      if (format === 'json') {
+        return reply.send({
+          success: true,
+          durationMs,
+          pdfSizeBytes: pdfBuffer.length,
+          pdfSizeKb: Math.round(pdfBuffer.length / 1024),
+          heapUsedMb: Math.round((memAfter - memBefore) / (1024 * 1024)),
+          totalPages: REPRESENTATIVE_TEST_DOCUMENT.pages.length,
+          engine: 'PDFKit + svg-to-pdfkit (Pure Vector)',
+        });
+      }
+
+      reply
+        .header('Content-Type', 'application/pdf')
+        .header('Content-Disposition', 'inline; filename="vector_test_template.pdf"')
+        .header('Content-Length', pdfBuffer.length)
+        .header('X-Generation-Time-Ms', durationMs)
+        .send(pdfBuffer);
+    } catch (err) {
+      console.error('[Test Vector PDF Route] Error:', err);
+      reply.status(500).send({ error: err.message, stack: err.stack });
+    }
+  });
+
   app.post('/api/generate-pdf', renderRateLimitConfig, async (request, reply) => {
     const startTime = Date.now();
     try {
       const {
         html,
+        designDoc,
+        designDocument,
+        renderer = 'puppeteer',
         totalPages = 1,
         fileName = 'biodata.pdf',
         snapshotData = null,
@@ -27,9 +66,18 @@ export default async function pdfRoutes(app, options) {
         name = 'Biodata',
       } = request.body || {};
 
-      if (!html || typeof html !== 'string') {
+      const activeDoc = designDoc || designDocument;
+      const isVector = renderer === 'vector' || !!activeDoc;
+
+      if (!isVector && (!html || typeof html !== 'string')) {
         return reply.status(400).send({
-          error: 'Missing or invalid "html" field in request body.',
+          error: 'Missing or invalid "html" field in request body for Puppeteer renderer, or provide "designDoc" for vector renderer.',
+        });
+      }
+
+      if (isVector && !activeDoc) {
+        return reply.status(400).send({
+          error: 'Missing or invalid "designDoc" field for vector renderer.',
         });
       }
 
@@ -44,7 +92,7 @@ export default async function pdfRoutes(app, options) {
             templateId: templateId || null,
             orderId: orderId || null,
             snapshotData: snapshotData || {},
-            renderedHtml: html,
+            renderedHtml: html || (activeDoc ? JSON.stringify(activeDoc) : null),
             expiresAt,
           },
         });
@@ -61,7 +109,7 @@ export default async function pdfRoutes(app, options) {
               templateId,
               orderId,
               snapshotData,
-              renderedHtml: html,
+              renderedHtml: html || (activeDoc ? JSON.stringify(activeDoc) : null),
               expiresAt: expiresAt.toISOString(),
             }),
             'EX',
@@ -73,11 +121,18 @@ export default async function pdfRoutes(app, options) {
         console.warn('[PDF Route] Snapshot save warning:', dbErr.message);
       }
 
-      // ── 2. Render True Vector PDF via Pre-Warmed Chromium ──────────────────
-      const pdfBuffer = await renderHtmlToVectorPdf(html, {
-        totalPages: Number(totalPages) || 1,
-        fileName,
-      });
+      // ── 2. Render PDF (Vector vs Puppeteer Fallback) ──────────────────────
+      let pdfBuffer;
+      if (isVector) {
+        console.log(`[PDF Route] Rendering via Pure Vector Engine (PDFKit) for "${fileName}"...`);
+        pdfBuffer = await generateVectorPdfFromDesign(activeDoc, { fileName });
+      } else {
+        console.log(`[PDF Route] Rendering via Puppeteer Chromium Fallback for "${fileName}"...`);
+        pdfBuffer = await renderHtmlToVectorPdf(html, {
+          totalPages: Number(totalPages) || 1,
+          fileName,
+        });
+      }
 
       const totalDuration = Date.now() - startTime;
       console.log(`[PDF Route] Completed in ${totalDuration}ms for "${fileName}"`);
