@@ -580,7 +580,18 @@ export default async function routes(app, options) {
           if (keyId && keySecret) {
             const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
             const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
-            const capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            let capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            if (!capturedPayment) {
+              const authorizedPayment = payments?.items?.find((p) => p.status === 'authorized');
+              if (authorizedPayment) {
+                try {
+                  capturedPayment = await rzp.payments.capture(authorizedPayment.id, authorizedPayment.amount, authorizedPayment.currency);
+                } catch (capErr) {
+                  app.log.warn('[order-status] Auto-capture attempt error:', capErr.message);
+                  capturedPayment = authorizedPayment;
+                }
+              }
+            }
             if (capturedPayment) {
               const contactUpdate = {};
               if (capturedPayment.contact) {
@@ -785,7 +796,18 @@ export default async function routes(app, options) {
           if (keyId && keySecret) {
             const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
             const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
-            const capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            let capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            if (!capturedPayment) {
+              const authorizedPayment = payments?.items?.find((p) => p.status === 'authorized');
+              if (authorizedPayment) {
+                try {
+                  capturedPayment = await rzp.payments.capture(authorizedPayment.id, authorizedPayment.amount, authorizedPayment.currency);
+                } catch (capErr) {
+                  app.log.warn('[download-paid-order] Auto-capture attempt error:', capErr.message);
+                  capturedPayment = authorizedPayment;
+                }
+              }
+            }
             if (capturedPayment) {
               order = await prisma.order.update({
                 where: { id: order.id },
