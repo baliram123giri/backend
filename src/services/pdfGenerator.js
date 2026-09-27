@@ -323,9 +323,21 @@ export async function setupPageSecurity(page) {
 async function waitForAssets(page) {
   try {
     await page.evaluate(async () => {
-      // 1. Wait for web fonts
-      if (document.fonts && document.fonts.ready) {
-        await document.fonts.ready;
+      // 1. Wait for web fonts and explicitly load all font faces
+      if (document.fonts) {
+        try {
+          await document.fonts.ready;
+          const fontLoads = [];
+          document.fonts.forEach((fontFace) => {
+            if (fontFace.status !== 'loaded') {
+              fontLoads.push(fontFace.load().catch(() => {}));
+            }
+          });
+          if (fontLoads.length > 0) {
+            await Promise.all(fontLoads);
+          }
+          await document.fonts.ready;
+        } catch {}
       }
 
       // 2. Wait for all images to fully load and decode naturally
@@ -363,6 +375,7 @@ const GUARANTEE_CSS = `
     background: white !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    font-synthesis: weight style !important;
   }
   @page {
     size: 210mm 297mm;
@@ -570,18 +583,20 @@ export function prepareNormalizedHtml(fullHtml) {
   // 1. Sanitize &quot; inside inline style attributes so SVG and CSS rules are not corrupted
   normalizedHtml = normalizedHtml.replace(/&quot;/g, "'");
 
-  // 2. Prevent Chromium Skia faux-bold glyph collapse on cursive script fonts with gradient text.
-  // Single-weight fonts like Great Vibes/Alex Brush only have 400. Faux-bold 700/800 breaks PDFium gradient text clipping.
+  // 2. Prevent Chromium Skia faux-bold glyph collapse on cursive script fonts ONLY when combined with gradient text clipping.
+  // Single-weight fonts like Great Vibes/Alex Brush only have 400. Faux-bold 700/800 breaks PDFium gradient text clipping (background-clip: text).
+  // For solid text (like header mantra and title), keep font-weight (700/800) so Chromium renders synthetic bold matching the preview.
   const scriptRegex = /Great Vibes|Alex Brush|Allura|Rozha One|Yatra One|Tangerine|Parisienne|Cookie|Dancing Script|Satisfy|Kaushan Script|Marck Script/i;
+  const gradientClipRegex = /background-clip:\s*text|-webkit-background-clip:\s*text/i;
   normalizedHtml = normalizedHtml
     .replace(/style="([^"]*)"/gi, (match, content) => {
-      if (scriptRegex.test(content)) {
+      if (scriptRegex.test(content) && gradientClipRegex.test(content)) {
         return `style="${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}"`;
       }
       return match;
     })
     .replace(/style='([^']*)'/gi, (match, content) => {
-      if (scriptRegex.test(content)) {
+      if (scriptRegex.test(content) && gradientClipRegex.test(content)) {
         return `style='${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}'`;
       }
       return match;

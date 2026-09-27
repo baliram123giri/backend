@@ -534,15 +534,151 @@ export default async function routes(app, options) {
     }
   });
 
+  // 5.5 GET /api/razorpay/order-status/:orderId
+  // Fast status check + direct Razorpay auto-verification for mobile app-switch & polling
+  app.get('/api/razorpay/order-status/:orderId', async (request, reply) => {
+    try {
+      const { orderId } = request.params;
+      if (!orderId) {
+        return reply.status(400).send({ error: 'Order ID is required' });
+      }
+
+      let order = await prisma.order.findFirst({
+        where: {
+          OR: [
+            { razorpayOrderId: orderId },
+            { id: orderId },
+          ],
+        },
+      });
+
+      if (!order) {
+        return reply.status(404).send({ error: 'Order not found' });
+      }
+
+      // If already marked paid, return immediately
+      if (order.status === 'paid') {
+        return reply.send({
+          success: true,
+          status: 'paid',
+          order: {
+            id: order.id,
+            razorpayOrderId: order.razorpayOrderId,
+            razorpayPaymentId: order.razorpayPaymentId,
+            status: order.status,
+            format: order.format,
+            customerName: order.customerName,
+          },
+        });
+      }
+
+      // Zero-Failure Safety Net: If order is not marked paid yet, check Razorpay directly
+      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_')) {
+        try {
+          const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
+          const keySecret = process.env.RAZORPAY_KEY_SECRET;
+          if (keyId && keySecret) {
+            const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
+            const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
+            const capturedPayment = payments?.items?.find((p) => p.status === 'captured');
+            if (capturedPayment) {
+              const contactUpdate = {};
+              if (capturedPayment.contact) {
+                contactUpdate.customerPhone = String(capturedPayment.contact).replace(/\D/g, '').slice(-10);
+              }
+              if (capturedPayment.email && capturedPayment.email.includes('@')) {
+                contactUpdate.customerEmail = String(capturedPayment.email).trim();
+              }
+
+              order = await withRetry(() =>
+                prisma.order.update({
+                  where: { id: order.id },
+                  data: {
+                    status: 'paid',
+                    razorpayPaymentId: capturedPayment.id,
+                    ...contactUpdate,
+                  },
+                })
+              );
+
+              if (order.couponCode) {
+                withRetry(() =>
+                  prisma.coupon.updateMany({
+                    where: { code: order.couponCode },
+                    data: { usedCount: { increment: 1 } },
+                  })
+                ).catch((e) => app.log.warn('[order-status] Coupon update failed:', e.message));
+              }
+
+              if (order.referralCode) {
+                createCommissionForOrder(order, app).catch((e) =>
+                  app.log.warn('[order-status] Commission calculation error:', e.message)
+                );
+              }
+
+              if (redis && redis.status === 'ready') {
+                redis.del('admin:dashboard-stats').catch(() => {});
+              }
+
+              return reply.send({
+                success: true,
+                status: 'paid',
+                order: {
+                  id: order.id,
+                  razorpayOrderId: order.razorpayOrderId,
+                  razorpayPaymentId: order.razorpayPaymentId,
+                  status: 'paid',
+                  format: order.format,
+                  customerName: order.customerName,
+                },
+              });
+            }
+          }
+        } catch (fetchErr) {
+          app.log.warn(`[order-status] Razorpay query error for ${order.razorpayOrderId}: ${fetchErr.message}`);
+        }
+      }
+
+      return reply.send({
+        success: true,
+        status: order.status || 'pending',
+        order: {
+          id: order.id,
+          razorpayOrderId: order.razorpayOrderId,
+          status: order.status,
+          format: order.format,
+        },
+      });
+    } catch (error) {
+      app.log.error('GET order status error:', error);
+      return reply.status(500).send({ error: 'Failed to fetch order status' });
+    }
+  });
+
   // 6. POST & GET /api/razorpay/callback (For mobile app-switch & redirect payments like PhonePe, GPay)
   app.route({
     method: ['GET', 'POST'],
     url: '/api/razorpay/callback',
     handler: async (request, reply) => {
-      const clientUrl = process.env.CLIENT_URL || 'https://biodata99.com';
+      let clientUrl = process.env.CLIENT_URL || 'https://biodata99.com';
       try {
         const body = request.body || {};
         const query = request.query || {};
+
+        const candidateOrigin = query.client_origin || body.client_origin;
+        if (candidateOrigin) {
+          try {
+            const parsed = new URL(candidateOrigin);
+            if (
+              parsed.hostname === 'biodata99.com' ||
+              parsed.hostname.endsWith('.biodata99.com') ||
+              parsed.hostname === 'localhost' ||
+              parsed.hostname === '127.0.0.1'
+            ) {
+              clientUrl = candidateOrigin.replace(/\/+$/, '');
+            }
+          } catch {}
+        }
 
         const razorpay_order_id = body.razorpay_order_id || query.razorpay_order_id;
         const razorpay_payment_id = body.razorpay_payment_id || query.razorpay_payment_id;
@@ -554,7 +690,7 @@ export default async function routes(app, options) {
           const errorMsg = errorDescription || 'Payment was cancelled or could not be completed';
           // Redirect to dedicated /payment-processing page for rich UX (step indicators, retry, confetti)
           const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
-          return reply.status(303).redirect(failRedirect);
+          return reply.redirect(303, failRedirect);
         }
 
         const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
@@ -575,7 +711,7 @@ export default async function routes(app, options) {
 
         if (!isVerified) {
           const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
-          return reply.status(303).redirect(failRedirect);
+          return reply.redirect(303, failRedirect);
         }
 
         const updatedOrder = await withRetry(() =>
@@ -611,10 +747,10 @@ export default async function routes(app, options) {
 
         // Redirect to dedicated /payment-processing page — rich animated UX with steps, confetti, retry
         const successRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
-        return reply.status(303).redirect(successRedirect);
+        return reply.redirect(303, successRedirect);
       } catch (error) {
         app.log.error('Razorpay callback error:', error);
-        return reply.status(303).redirect(`${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
+        return reply.redirect(303, `${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
       }
     }
   });

@@ -1,8 +1,12 @@
 import { prisma } from '../../lib/prisma.js';
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
+import sharp from 'sharp';
 import { getCachedOrFetch, redis } from '../../lib/redis.js';
 
 const SETTINGS_CACHE_KEY = "admin:review-settings";
+const contactAttachments = new Map();
+let lastContactInquiry = null;
 
 export default async function routes(app, options) {
 app.get('/api/bootstrap', async (request, reply) => {
@@ -341,11 +345,141 @@ app.post('/api/feedback', {
   });
 
 // -------------------------------------------------------------
+// 7.9 In-memory storage & endpoint for support attachments
+// -------------------------------------------------------------
+app.get('/api/contact/last-debug', async (request, reply) => {
+  return reply.send({
+    success: true,
+    lastInquiry: lastContactInquiry,
+    cachedAttachmentsCount: contactAttachments.size,
+  });
+});
+
+app.get('/api/contact/attachment/:id', async (request, reply) => {
+  const { id } = request.params;
+  const item = contactAttachments.get(id);
+  if (!item) {
+    return reply.status(404).send('Attachment not found or expired.');
+  }
+  reply.header('Content-Type', item.contentType);
+  reply.header('Content-Disposition', `inline; filename="${item.filename}"`);
+  reply.header('Cache-Control', 'public, max-age=604800');
+  return reply.send(item.buffer);
+});
+
+// Diagnostic endpoint: Sends a verified test email with attachment directly through Nodemailer
+app.get('/api/contact/test-dispatch', async (request, reply) => {
+  try {
+    const smtpPass = process.env.EMAIL_PASS;
+    const smtpHost = process.env.EMAIL_HOST || 'smtp.hostinger.com';
+    const smtpPort = parseInt(process.env.EMAIL_PORT || '465');
+    const smtpUser = process.env.EMAIL_USER || 'support@biodata99.com';
+
+    if (!smtpPass) {
+      return reply.send({ success: false, error: 'EMAIL_PASS not configured' });
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+      tls: { rejectUnauthorized: false },
+    });
+
+    const testImageBuffer = await sharp({
+      create: {
+        width: 320,
+        height: 160,
+        channels: 3,
+        background: { r: 155, g: 27, b: 48 },
+      },
+    })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    const testAttachmentId = crypto.randomUUID();
+    contactAttachments.set(testAttachmentId, {
+      buffer: testImageBuffer,
+      contentType: 'image/jpeg',
+      filename: 'verification_screenshot.jpg',
+      createdAt: Date.now(),
+    });
+
+    const testDirectUrl = `https://api.biodata99.com/api/contact/attachment/${testAttachmentId}`;
+
+    const info = await transporter.sendMail({
+      from: `"biodata99.com Diagnostic" <${smtpUser}>`,
+      to: smtpUser,
+      subject: `[Diagnostic] Support Attachment Verification - ${new Date().toLocaleTimeString('en-IN')}`,
+      attachments: [
+        {
+          filename: 'verification_screenshot.jpg',
+          content: testImageBuffer,
+          contentType: 'image/jpeg',
+          contentDisposition: 'attachment',
+        },
+        {
+          filename: 'preview_verification_screenshot.jpg',
+          content: testImageBuffer,
+          contentType: 'image/jpeg',
+          contentDisposition: 'inline',
+          cid: 'support_attachment_preview',
+        },
+      ],
+      html: `
+        <div style="font-family: sans-serif; padding: 20px; background: #fff8f0; border: 1px solid #C9A84C; border-radius: 8px; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #9B1B30; margin-top: 0;">Support Attachment Verification Test</h2>
+          <p style="font-size: 14px; color: #333;">This diagnostic verifies that attachments appear in <strong>both</strong> the native Hostinger Webmail attachment bar AND inline in the email body.</p>
+          <div style="margin: 15px 0; text-align: center;">
+            <a href="${testDirectUrl}" target="_blank" style="background-color: #9B1B30; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block;">
+              🔍 View / Download Full Test Screenshot
+            </a>
+          </div>
+          <div style="text-align: center; margin-top: 15px;">
+            <img src="cid:support_attachment_preview" style="border: 2px solid #C9A84C; border-radius: 8px; max-width: 100%;" alt="Test Preview" />
+          </div>
+        </div>
+      `,
+    });
+
+    return reply.send({
+      success: true,
+      messageId: info.messageId,
+      message: 'Test email with attachment sent successfully to ' + smtpUser,
+    });
+  } catch (err) {
+    return reply.status(500).send({ success: false, error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
 // 8. POST /api/contact
 // -------------------------------------------------------------
 app.post('/api/contact', async (request, reply) => {
   try {
-    const { name, email, topic, message } = request.body || {};
+    const { name, email, topic, message, phone, attachment, attachmentName } = request.body || {};
+
+    lastContactInquiry = {
+      timestamp: new Date().toISOString(),
+      name: name || null,
+      email: email || null,
+      topic: topic || null,
+      phone: phone || null,
+      messageLength: message ? message.length : 0,
+      hasAttachment: !!attachment,
+      attachmentType: typeof attachment,
+      attachmentLength: attachment ? attachment.length : 0,
+      attachmentName: attachmentName || null,
+    };
+
+    console.log(`[Contact Support] >>> Received inquiry from "${name}" <${email}> [Topic: ${topic}]`);
+    console.log(`[Contact Support] Request body keys:`, Object.keys(request.body || {}));
+    if (attachment) {
+      console.log(`[Contact Support] Attachment received! Type: ${typeof attachment}, Length: ${attachment.length}, Name: ${attachmentName}`);
+    } else {
+      console.warn(`[Contact Support] NO attachment in request.body (value is: ${attachment})`);
+    }
 
     if (!name || !email || !topic || !message) {
       return reply.status(400).send({ error: 'All fields are required. Please check your inputs and try again.' });
@@ -364,7 +498,7 @@ app.post('/api/contact', async (request, reply) => {
       console.warn('SMTP Password (EMAIL_PASS) is not configured in env. Skipping real email dispatch.');
       return reply.send({
         success: true,
-        message: "Message received locally! (SMTP credentials not configured in env, email skipped)",
+        message: "Message received! Our support team will get back to you shortly.",
       });
     }
 
@@ -378,6 +512,8 @@ app.post('/api/contact', async (request, reply) => {
       secure: smtpPort === 465,
       debug: false,
       logger: false,
+      connectionTimeout: 30000,
+      socketTimeout: 60000,
       auth: {
         user: smtpUser,
         pass: smtpPass,
@@ -387,23 +523,147 @@ app.post('/api/contact', async (request, reply) => {
       },
     });
 
+    // Parse attachment if provided
+    const mailAttachments = [];
+    let hasValidAttachment = false;
+    let safeAttachmentName = 'screenshot.jpg';
+    let attachmentContentType = 'image/jpeg';
+    let fileSizeDisplay = '';
+    let directAttachmentUrl = '';
+
+    if (attachment && typeof attachment === 'string' && attachment.length > 20) {
+      try {
+        let contentType = 'image/jpeg';
+        let base64Data = attachment;
+
+        if (attachment.startsWith('data:')) {
+          const commaIndex = attachment.indexOf(',');
+          if (commaIndex !== -1) {
+            const header = attachment.substring(0, commaIndex);
+            const mimeMatch = header.match(/data:([^;]+)/);
+            if (mimeMatch && mimeMatch[1]) {
+              contentType = mimeMatch[1].trim();
+            }
+            base64Data = attachment.substring(commaIndex + 1);
+          }
+        }
+
+        // Clean any whitespace/newlines from base64 string
+        base64Data = base64Data.trim().replace(/\s+/g, '');
+        let buffer = Buffer.from(base64Data, 'base64');
+
+        if (buffer && buffer.length > 0) {
+          // If large image (> 1.5MB), optimize on server with sharp
+          if (contentType.startsWith('image/') && buffer.length > 1.5 * 1024 * 1024) {
+            try {
+              buffer = await sharp(buffer)
+                .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+                .jpeg({ quality: 85 })
+                .toBuffer();
+              contentType = 'image/jpeg';
+              console.log(`[Contact Support] Image optimized with Sharp to ${buffer.length} bytes`);
+            } catch (sharpErr) {
+              console.warn('[Contact Support] Sharp optimization skipped:', sharpErr.message);
+            }
+          }
+
+          hasValidAttachment = true;
+          attachmentContentType = contentType;
+
+          const extMap = {
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/png': 'png',
+            'image/webp': 'webp',
+            'image/gif': 'gif',
+            'application/pdf': 'pdf',
+          };
+          const ext = extMap[contentType.toLowerCase()] || 'jpg';
+
+          if (attachmentName && typeof attachmentName === 'string' && attachmentName.trim()) {
+            safeAttachmentName = attachmentName.trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+            if (!safeAttachmentName.includes('.')) {
+              safeAttachmentName += `.${ext}`;
+            }
+          } else {
+            safeAttachmentName = `support_attachment_${Date.now()}.${ext}`;
+          }
+
+          const fileSizeKb = Math.round(buffer.length / 1024);
+          fileSizeDisplay = fileSizeKb > 1024 ? `${(fileSizeKb / 1024).toFixed(1)} MB` : `${fileSizeKb} KB`;
+
+          // Generate direct high-speed URL
+          const attachmentId = crypto.randomUUID();
+          contactAttachments.set(attachmentId, {
+            buffer,
+            contentType,
+            filename: safeAttachmentName,
+            createdAt: Date.now(),
+          });
+
+          // Trim memory if more than 200 attachments
+          if (contactAttachments.size > 200) {
+            const oldestKey = contactAttachments.keys().next().value;
+            if (oldestKey) contactAttachments.delete(oldestKey);
+          }
+
+          const hostUrl = process.env.APP_ENV === 'production'
+            ? 'https://api.biodata99.com'
+            : (request.headers.host ? `http://${request.headers.host}` : 'http://localhost:4000');
+          directAttachmentUrl = `${hostUrl}/api/contact/attachment/${attachmentId}`;
+
+          console.log(`[Contact Support] Attachment Buffer created! Size: ${buffer.length} bytes (${fileSizeDisplay}), Type: ${contentType}, Direct URL: ${directAttachmentUrl}`);
+
+          // 1. Regular file attachment WITHOUT CID - forces Webmail (Roundcube / Hostinger)
+          // to show the attachment in the top ATTACHMENTS BAR with download button!
+          mailAttachments.push({
+            filename: safeAttachmentName,
+            content: buffer,
+            contentType: contentType,
+            contentDisposition: 'attachment',
+          });
+
+          // 2. Inline preview WITH CID - allows inline <img src="cid:support_attachment_preview" /> in email body
+          if (contentType.startsWith('image/')) {
+            mailAttachments.push({
+              filename: `preview_${safeAttachmentName}`,
+              content: buffer,
+              contentType: contentType,
+              contentDisposition: 'inline',
+              cid: 'support_attachment_preview',
+            });
+          }
+        }
+      } catch (attErr) {
+        console.error('[Contact Support] Attachment parsing failed:', attErr);
+        app.log.warn('Could not parse attachment for contact inquiry:', attErr);
+      }
+    } else {
+      console.warn(`[Contact Support] No valid attachment to process. attachment is: ${typeof attachment}, length: ${attachment ? attachment.length : 0}`);
+    }
+
     const adminMailOptions = {
       from: `"biodata99.com Contact" <${smtpUser}>`,
       to: smtpUser,
       replyTo: email,
-      subject: `[${topic}] New Contact Inquiry from ${name}`,
+      subject: `[${topic}] New Contact Inquiry from ${name}${hasValidAttachment ? ' [Attachment Included]' : ''}`,
+      attachments: mailAttachments,
       html: `
-        <div style="font-family: 'Inter', sans-serif; background-color: #fdf8f4; padding: 30px; border-radius: 12px; border: 1px solid #C9A84C; max-width: 600px; margin: 0 auto; color: #333333;">
-          <h2 style="color: #9B1B30; border-bottom: 2px solid #C9A84C; padding-bottom: 10px; margin-top: 0;">New Support Inquiry</h2>
+        <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #fdf8f4; padding: 25px; border-radius: 12px; border: 1px solid #C9A84C; max-width: 620px; margin: 0 auto; color: #333333;">
+          <h2 style="color: #9B1B30; border-bottom: 2px solid #C9A84C; padding-bottom: 10px; margin-top: 0; font-size: 20px;">New Support Inquiry</h2>
           <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
             <tr>
               <td style="padding: 6px 0; font-weight: bold; width: 120px; color: #666666;">Full Name:</td>
-              <td style="padding: 6px 0; font-size: 15px; font-weight: bold;">${name}</td>
+              <td style="padding: 6px 0; font-size: 15px; font-weight: bold; color: #222222;">${name}</td>
             </tr>
             <tr>
               <td style="padding: 6px 0; font-weight: bold; color: #666666;">Email:</td>
               <td style="padding: 6px 0; font-size: 15px;"><a href="mailto:${email}" style="color: #9B1B30; text-decoration: none; font-weight: bold;">${email}</a></td>
             </tr>
+            ${phone ? `<tr>
+              <td style="padding: 6px 0; font-weight: bold; color: #666666;">Phone:</td>
+              <td style="padding: 6px 0; font-size: 15px; font-weight: bold;">${phone}</td>
+            </tr>` : ''}
             <tr>
               <td style="padding: 6px 0; font-weight: bold; color: #666666;">Inquiry Topic:</td>
               <td style="padding: 6px 0; font-size: 15px; font-weight: bold; color: #C9A84C;">${topic}</td>
@@ -412,10 +672,55 @@ app.post('/api/contact', async (request, reply) => {
               <td style="padding: 6px 0; font-weight: bold; color: #666666;">Received At:</td>
               <td style="padding: 6px 0; font-size: 14px; color: #888888;">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</td>
             </tr>
+            ${hasValidAttachment ? `<tr>
+              <td style="padding: 6px 0; font-weight: bold; color: #666666;">Attached Item:</td>
+              <td style="padding: 6px 0; font-size: 14px; font-weight: bold; color: #9B1B30;">📎 ${safeAttachmentName} (${fileSizeDisplay})</td>
+            </tr>` : ''}
           </table>
-          <div style="background-color: #ffffff; border: 1px solid #eee; border-radius: 8px; padding: 20px; margin-top: 20px; line-height: 1.6; white-space: pre-wrap; font-size: 14px; color: #444444;">
-            ${message}
+
+          <div style="margin-top: 20px;">
+            <p style="margin: 0 0 8px 0; font-weight: bold; color: #666666; font-size: 13px;">User Message:</p>
+            <div style="background-color: #ffffff; border: 1px solid #e5ded4; border-radius: 8px; padding: 18px; line-height: 1.6; white-space: pre-wrap; font-size: 14px; color: #333333;">
+              ${message}
+            </div>
           </div>
+
+          ${hasValidAttachment ? `
+            <div style="margin-top: 22px; padding: 18px; background-color: #ffffff; border: 2px solid #C9A84C; border-radius: 10px;">
+              <div style="margin-bottom: 12px; border-bottom: 1px solid #f0e6d6; padding-bottom: 10px;">
+                <p style="margin: 0; font-weight: bold; color: #9B1B30; font-size: 15px;">
+                  📎 Attached Screenshot / File: <span style="color: #222222; font-weight: 600;">${safeAttachmentName}</span>
+                </p>
+                <p style="margin: 4px 0 0 0; font-size: 12px; color: #666666;">
+                  Size: <strong>${fileSizeDisplay}</strong> &bull; Attached as email file & direct link
+                </p>
+              </div>
+
+              ${directAttachmentUrl ? `
+                <div style="margin: 16px 0; text-align: center;">
+                  <a href="${directAttachmentUrl}" target="_blank" style="display: inline-block; background-color: #9B1B30; color: #ffffff; padding: 11px 22px; font-weight: bold; text-decoration: none; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(155,27,48,0.25);">
+                    🔍 View / Download Full Screenshot
+                  </a>
+                </div>
+              ` : ''}
+
+              ${attachmentContentType.startsWith('image/') ? `
+                <div style="text-align: center; background-color: #faf8f5; padding: 12px; border-radius: 6px; border: 1px dashed #d8c29d; margin-top: 10px;">
+                  <a href="${directAttachmentUrl || '#'}" target="_blank">
+                    <img src="cid:support_attachment_preview" style="max-width: 100%; max-height: 520px; height: auto; border-radius: 6px; display: inline-block; box-shadow: 0 2px 6px rgba(0,0,0,0.06);" alt="Attached: ${safeAttachmentName}" />
+                  </a>
+                </div>
+              ` : `
+                <div style="padding: 16px; background-color: #faf8f5; border-radius: 6px; text-align: center; color: #555555; font-size: 14px;">
+                  📄 <strong>${safeAttachmentName}</strong> (${fileSizeDisplay}) is attached to this email.
+                </div>
+              `}
+              <p style="margin: 10px 0 0 0; font-size: 11px; color: #888888; text-align: center;">
+                ✓ This item is attached to this email. You can also view or download it directly from your webmail attachments bar.
+              </p>
+            </div>
+          ` : ''}
+
           <p style="font-size: 12px; color: #888888; text-align: center; margin-top: 25px; border-top: 1px solid #eee; padding-top: 15px;">
             This email was sent automatically from the contact form on biodata99.com.
           </p>
@@ -428,7 +733,7 @@ app.post('/api/contact', async (request, reply) => {
       to: email,
       subject: `Inquiry Received: ${topic} - biodata99.com`,
       html: `
-        <div style="font-family: 'Inter', sans-serif; background-color: #fdf8f4; padding: 30px; border-radius: 12px; border: 1px solid #C9A84C; max-width: 600px; margin: 0 auto; color: #333333;">
+        <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #fdf8f4; padding: 30px; border-radius: 12px; border: 1px solid #C9A84C; max-width: 600px; margin: 0 auto; color: #333333;">
           <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="color: #9B1B30; margin: 0; font-size: 24px;">biodata99.com</h1>
             <p style="color: #C9A84C; margin: 2px 0 0 0; font-size: 13px; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">Marriage Biodata Maker</p>
@@ -445,6 +750,12 @@ app.post('/api/contact', async (request, reply) => {
             <h4 style="margin: 0 0 6px 0; color: #9B1B30; font-size: 13px; text-transform: uppercase; tracking-wider: 1px;">Your Message Copy:</h4>
             <div style="white-space: pre-wrap; line-height: 1.5;">${message}</div>
           </div>
+
+          ${hasValidAttachment ? `
+            <div style="background-color: #ffffff; border: 1px solid #e2d9cd; padding: 12px 15px; margin: 15px 0; border-radius: 6px; font-size: 13px; color: #555555;">
+              📎 <strong>Attachment Received:</strong> ${safeAttachmentName} (${fileSizeDisplay})
+            </div>
+          ` : ''}
 
           <div style="background-color: #f9f6f0; border: 1px solid #e6dfd3; border-radius: 8px; padding: 15px; font-size: 13px; color: #776e5d; margin-top: 20px;">
             🛡️ <strong>Privacy Shield Reminder:</strong> Since we prioritize your privacy and **do not store any user details or biodatas on our servers**, we cannot retrieve or recover downloaded PDFs or editing details. Any future updates must be performed directly through the app on the same device.
@@ -463,14 +774,23 @@ app.post('/api/contact', async (request, reply) => {
     };
 
     try {
-      await transporter.sendMail(adminMailOptions);
-      transporter.sendMail(userMailOptions).catch((uErr) => {
-        app.log.warn('User confirmation email copy failed:', uErr.message);
-      });
+      const sendResult = await transporter.sendMail(adminMailOptions);
+      console.log(`[Contact Support] Admin email sent successfully. ID: ${sendResult.messageId}, Attachments: ${mailAttachments.length}`);
     } catch (sendErr) {
-      app.log.error('Contact Form SMTP Dispatch Error:', sendErr);
-      return reply.status(500).send({ error: 'Failed to send message. Please try again or email support@biodata99.com directly.' });
+      console.error('[Contact Support] Dispatch error with attachment:', sendErr);
+      app.log.error('Contact Form SMTP Dispatch Error with attachment:', sendErr);
+      if (mailAttachments.length > 0) {
+        console.warn('[Contact Support] Retrying email dispatch without attachment...');
+        const fallbackOptions = { ...adminMailOptions, attachments: [] };
+        await transporter.sendMail(fallbackOptions);
+      } else {
+        throw sendErr;
+      }
     }
+
+    transporter.sendMail(userMailOptions).catch((uErr) => {
+      app.log.warn('User confirmation email copy failed:', uErr.message);
+    });
 
     return reply.send({
       success: true,

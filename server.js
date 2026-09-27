@@ -37,7 +37,7 @@ const app = fastify({
 });
 
 // Support application/x-www-form-urlencoded (for Razorpay payment gateway callbacks)
-app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (req, body, done) => {
+app.addContentTypeParser(/^application\/x-www-form-urlencoded/i, { parseAs: 'string' }, (req, body, done) => {
   try {
     done(null, querystring.parse(body));
   } catch (err) {
