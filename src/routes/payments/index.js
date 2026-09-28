@@ -701,7 +701,7 @@ export default async function routes(app, options) {
           const errorMsg = errorDescription || 'Payment was cancelled or could not be completed';
           // Redirect to dedicated /payment-processing page for rich UX (step indicators, retry, confetti)
           const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
-          return reply.redirect(303, failRedirect);
+          return reply.redirect(failRedirect, 303);
         }
 
         const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
@@ -722,7 +722,7 @@ export default async function routes(app, options) {
 
         if (!isVerified) {
           const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
-          return reply.redirect(303, failRedirect);
+          return reply.redirect(failRedirect, 303);
         }
 
         const updatedOrder = await withRetry(() =>
@@ -758,10 +758,10 @@ export default async function routes(app, options) {
 
         // Redirect to dedicated /payment-processing page — rich animated UX with steps, confetti, retry
         const successRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
-        return reply.redirect(303, successRedirect);
+        return reply.redirect(successRedirect, 303);
       } catch (error) {
         app.log.error('Razorpay callback error:', error);
-        return reply.redirect(303, `${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`);
+        return reply.redirect(`${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`, 303);
       }
     }
   });
