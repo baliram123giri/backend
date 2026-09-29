@@ -8,6 +8,7 @@ import {
 } from '../../services/pdfGenerator.js';
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
+import { getCashfreeOrderStatus, getCashfreeConfig } from '../../services/cashfree.js';
 
 export default async function routes(app, options) {
   // 1. GET /api/razorpay/active-coupons
@@ -572,8 +573,41 @@ export default async function routes(app, options) {
         });
       }
 
-      // Zero-Failure Safety Net: If order is not marked paid yet, check Razorpay directly
-      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_')) {
+      // Zero-Failure Safety Net: If order is not marked paid yet, check gateway directly
+      if (order.status !== 'paid' && order.razorpayOrderId && order.razorpayOrderId.startsWith('cf_')) {
+        try {
+          const cfConfig = getCashfreeConfig();
+          if (cfConfig.isConfigured) {
+            const cfOrder = await getCashfreeOrderStatus(order.razorpayOrderId);
+            if (cfOrder && cfOrder.order_status === 'PAID') {
+              order = await withRetry(() =>
+                prisma.order.update({
+                  where: { id: order.id },
+                  data: {
+                    status: 'paid',
+                    razorpayPaymentId: `cf_verified_${Date.now()}`,
+                  },
+                })
+              );
+              return reply.send({
+                success: true,
+                status: 'paid',
+                order: {
+                  id: order.id,
+                  razorpayOrderId: order.razorpayOrderId,
+                  status: 'paid',
+                  format: order.format,
+                  customerName: order.customerName,
+                },
+              });
+            }
+          }
+        } catch (cfErr) {
+          app.log.warn('[order-status] Cashfree auto-verify warn:', cfErr.message);
+        }
+      }
+
+      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_') && !order.razorpayOrderId.startsWith('cf_')) {
         try {
           const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
           const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -788,8 +822,28 @@ export default async function routes(app, options) {
         return reply.status(404).send({ error: 'Order not found' });
       }
 
-      // Zero-Failure Safety Net: If order is not marked paid yet, check Razorpay directly
-      if (order.status !== 'paid' && order.razorpayOrderId) {
+      // Zero-Failure Safety Net: If order is not marked paid yet, check gateway directly
+      if (order.status !== 'paid' && order.razorpayOrderId && order.razorpayOrderId.startsWith('cf_')) {
+        try {
+          const cfConfig = getCashfreeConfig();
+          if (cfConfig.isConfigured) {
+            const cfOrder = await getCashfreeOrderStatus(order.razorpayOrderId);
+            if (cfOrder && cfOrder.order_status === 'PAID') {
+              order = await prisma.order.update({
+                where: { id: order.id },
+                data: {
+                  status: 'paid',
+                  razorpayPaymentId: `cf_verified_${Date.now()}`,
+                },
+              });
+            }
+          }
+        } catch (cfErr) {
+          app.log.warn('[download-paid-order] Cashfree auto-verify warn:', cfErr.message);
+        }
+      }
+
+      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_') && !order.razorpayOrderId.startsWith('cf_')) {
         try {
           const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
           const keySecret = process.env.RAZORPAY_KEY_SECRET;

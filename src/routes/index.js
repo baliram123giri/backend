@@ -10,6 +10,7 @@ import userRoutes from './user/index.js';
 import affiliateRoutes from './affiliate/index.js';
 import blogRoutes from './blog/index.js';
 import pdfRoutes from './pdf/index.js';
+import cashfreeRoutes from './cashfree/index.js';
 
 export default async function appRoutes(app, options) {
   // 1. Diagnostic / Health routes
@@ -28,6 +29,7 @@ export default async function appRoutes(app, options) {
   await app.register(aiRoutes);
   await app.register(assetsRoutes);
   await app.register(paymentsRoutes);
+  await app.register(cashfreeRoutes);
   await app.register(proxyRoutes);
   await app.register(stickersRoutes);
   await app.register(publicTemplateRoutes);
