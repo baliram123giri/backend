@@ -544,16 +544,36 @@ export default async function cashfreeRoutes(app, options) {
         let paymentId = '';
 
         if (config.isConfigured) {
-          try {
-            const cfOrder = await getCashfreeOrderStatus(orderId);
-            if (cfOrder && cfOrder.order_status === 'PAID') {
-              isPaid = true;
-              const payments = await getCashfreeOrderPayments(orderId);
-              const successPay = payments.find((p) => p.payment_status === 'SUCCESS');
-              paymentId = successPay?.cf_payment_id ? String(successPay.cf_payment_id) : `cf_paid_${Date.now()}`;
+          // Retry loop: UPI app-switch payments (PhonePe, GPay) may take a few seconds
+          // for Cashfree to mark as PAID after the redirect fires. Retry up to 5 times.
+          const MAX_STATUS_ATTEMPTS = 5;
+          const STATUS_RETRY_DELAY_MS = 2000;
+
+          for (let attempt = 0; attempt < MAX_STATUS_ATTEMPTS; attempt++) {
+            try {
+              const cfOrder = await getCashfreeOrderStatus(orderId);
+              if (cfOrder && cfOrder.order_status === 'PAID') {
+                isPaid = true;
+                const payments = await getCashfreeOrderPayments(orderId);
+                const successPay = payments.find((p) => p.payment_status === 'SUCCESS');
+                paymentId = successPay?.cf_payment_id ? String(successPay.cf_payment_id) : `cf_paid_${Date.now()}`;
+                break; // confirmed PAID — exit retry loop
+              }
+
+              // If order is explicitly CANCELLED/TERMINATED, stop retrying early
+              if (cfOrder && (cfOrder.order_status === 'CANCELLED' || cfOrder.order_status === 'TERMINATED' || cfOrder.order_status === 'EXPIRED')) {
+                app.log.info(`[Cashfree Callback] Order ${orderId} status: ${cfOrder.order_status} — stopping retries`);
+                break;
+              }
+
+              app.log.info(`[Cashfree Callback] Attempt ${attempt + 1}/${MAX_STATUS_ATTEMPTS}: order ${orderId} status=${cfOrder?.order_status || 'unknown'}, retrying in ${STATUS_RETRY_DELAY_MS}ms...`);
+            } catch (cfErr) {
+              app.log.error(`[Cashfree Callback] Attempt ${attempt + 1} error querying order status:`, cfErr);
             }
-          } catch (cfErr) {
-            app.log.error('[Cashfree Callback] Error querying order status:', cfErr);
+
+            if (attempt < MAX_STATUS_ATTEMPTS - 1) {
+              await new Promise((r) => setTimeout(r, STATUS_RETRY_DELAY_MS));
+            }
           }
         }
 
