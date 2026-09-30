@@ -288,7 +288,7 @@ export default async function cashfreeRoutes(app, options) {
               }),
               'EX',
               86400
-            ).catch(() => {});
+            ).catch(() => { });
           }
         } catch (snapErr) {
           app.log.warn('[Cashfree Create Order] Snapshot save warning:', snapErr.message);
@@ -332,8 +332,8 @@ export default async function cashfreeRoutes(app, options) {
         customerDetails: {
           customer_id: customerPhone ? `cust_${customerPhone.slice(-10)}` : `cust_${Date.now()}`,
           customer_name: customerName || 'Customer',
-          customer_email: customerEmail || 'support@biodata99.com',
-          customer_phone: customerPhone || '9999999999',
+          customer_email: customerEmail || '',
+          customer_phone: customerPhone || '',
         },
         orderMeta: {
           return_url: returnUrl,
@@ -442,7 +442,7 @@ export default async function cashfreeRoutes(app, options) {
             }
 
             if (redis && redis.status === 'ready') {
-              redis.del('admin:dashboard-stats').catch(() => {});
+              redis.del('admin:dashboard-stats').catch(() => { });
             }
 
             return reply.send({
@@ -471,7 +471,7 @@ export default async function cashfreeRoutes(app, options) {
                   downloadErrorMsg: String(failureReason).slice(0, 500),
                 },
               })
-            ).catch(() => {});
+            ).catch(() => { });
 
             return reply.send({
               success: true,
@@ -531,7 +531,7 @@ export default async function cashfreeRoutes(app, options) {
             ) {
               clientUrl = candidateOrigin.replace(/\/+$/, '');
             }
-          } catch {}
+          } catch { }
         }
 
         const orderId = query.order_id || body.order_id;
@@ -595,11 +595,11 @@ export default async function cashfreeRoutes(app, options) {
                 where: { code: updatedOrder.couponCode },
                 data: { usedCount: { increment: 1 } },
               })
-            ).catch(() => {});
+            ).catch(() => { });
           }
 
           if (updatedOrder?.referralCode) {
-            createCommissionForOrder(updatedOrder, app).catch(() => {});
+            createCommissionForOrder(updatedOrder, app).catch(() => { });
           }
 
           return reply.redirect(
@@ -625,7 +625,7 @@ export default async function cashfreeRoutes(app, options) {
               if (cfOrder?.order_status === 'CANCELLED' || cfOrder?.order_status === 'TERMINATED') {
                 finalStatus = 'cancelled';
               }
-            } catch {}
+            } catch { }
           }
 
           const queryError = (query.error || body.error || '').toLowerCase();
@@ -718,7 +718,7 @@ export default async function cashfreeRoutes(app, options) {
             where: { code: updatedOrder.couponCode },
             data: { usedCount: { increment: 1 } },
           })
-        ).catch(() => {});
+        ).catch(() => { });
       }
 
       if (updatedOrder.referralCode) {
@@ -798,7 +798,7 @@ export default async function cashfreeRoutes(app, options) {
               downloadErrorMsg: String(failureReason).slice(0, 500),
             },
           })
-        ).catch(() => {});
+        ).catch(() => { });
       }
 
       return reply.send({ success: true, message: 'Webhook received' });
@@ -892,7 +892,7 @@ export default async function cashfreeRoutes(app, options) {
               finalStatus = 'cancelled';
             }
           }
-        } catch {}
+        } catch { }
       }
 
       const reasonLower = (finalReason || '').toLowerCase();
@@ -915,7 +915,7 @@ export default async function cashfreeRoutes(app, options) {
           const keys = await redis.keys('transactions:*');
           if (keys.length > 0) await redis.del(keys);
           await redis.del('admin:dashboard-stats');
-        } catch {}
+        } catch { }
       }
 
       app.log.info(`[Cashfree Mark Status] Order ${existing.razorpayOrderId} marked as ${finalStatus}: ${finalReason}`);
