@@ -315,7 +315,13 @@ export default async function cashfreeRoutes(app, options) {
       const cleanOrigin = originHeader.split('/api')[0].replace(/\/+$/, '');
 
       // Backend callback URL that verifies the order and then redirects to the frontend
-      const serverBaseUrl = process.env.API_BASE_URL || `http://${request.headers.host || '127.0.0.1:4000'}`;
+      const proto = request.headers['x-forwarded-proto'] || (config.isProduction ? 'https' : 'http');
+      const fallbackHost = request.headers.host || '127.0.0.1:4000';
+      let serverBaseUrl = process.env.API_BASE_URL || `${proto}://${fallbackHost}`;
+      // In production or on live domains, Cashfree strictly enforces HTTPS on return_url
+      if (config.isProduction || (!serverBaseUrl.includes('localhost') && !serverBaseUrl.includes('127.0.0.1'))) {
+        serverBaseUrl = serverBaseUrl.replace(/^http:\/\//i, 'https://');
+      }
       const returnUrl = `${serverBaseUrl}/api/cashfree/callback?order_id={order_id}&client_origin=${encodeURIComponent(cleanOrigin)}`;
       const notifyUrl = `${serverBaseUrl}/api/cashfree/webhook`;
 

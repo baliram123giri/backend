@@ -72,8 +72,16 @@ export async function createCashfreeOrder({
       customer_phone: cleanPhone,
     },
     order_meta: {
-      return_url: orderMeta?.return_url,
-      notify_url: orderMeta?.notify_url,
+      return_url: orderMeta?.return_url ? (
+        orderMeta.return_url.includes('localhost') || orderMeta.return_url.includes('127.0.0.1')
+          ? orderMeta.return_url
+          : orderMeta.return_url.replace(/^http:\/\//i, 'https://')
+      ) : undefined,
+      notify_url: orderMeta?.notify_url ? (
+        orderMeta.notify_url.includes('localhost') || orderMeta.notify_url.includes('127.0.0.1')
+          ? orderMeta.notify_url
+          : orderMeta.notify_url.replace(/^http:\/\//i, 'https://')
+      ) : undefined,
       payment_methods: 'upi,cc,dc,nb,app',
     },
     order_note: String(orderNote).slice(0, 100),
