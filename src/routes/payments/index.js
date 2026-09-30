@@ -7,11 +7,11 @@ import {
   renderHtmlToComboZip,
 } from '../../services/pdfGenerator.js';
 import crypto from 'crypto';
-import Razorpay from 'razorpay';
+// Razorpay SDK removed — app now uses Cashfree exclusively.
 import { getCashfreeOrderStatus, getCashfreeConfig } from '../../services/cashfree.js';
 
 export default async function routes(app, options) {
-  // 1. GET /api/razorpay/active-coupons
+  // 1. GET /api/cashfree/active-coupons (also aliased from /api/razorpay/ for legacy)
   app.get('/api/razorpay/active-coupons', async (request, reply) => {
     try {
       const cacheKey = 'active-coupons';
@@ -39,7 +39,7 @@ export default async function routes(app, options) {
     }
   });
 
-  // 2. POST /api/razorpay/validate-coupon
+  // 2. POST /api/cashfree/validate-coupon (also aliased from /api/razorpay/ for legacy)
   app.post('/api/razorpay/validate-coupon', async (request, reply) => {
     try {
       const { code } = request.body || {};
@@ -102,395 +102,24 @@ export default async function routes(app, options) {
     }
   });
 
-  // 3. POST /api/razorpay/create-order
-  app.post('/api/razorpay/create-order', async (request, reply) => {
-    try {
-      const {
-        amount,
-        currency,
-        templateId,
-        format,
-        customerName,
-        customerEmail,
-        customerPhone,
-        couponCode,
-        ref,
-        html,
-        renderedHtml,
-        snapshotData,
-      } = request.body || {};
-
-      if (amount === undefined || amount === null || !templateId || !format) {
-        return reply.status(400).send({ error: 'Amount, templateId, and format are required fields' });
-      }
-
-      let discountApplied = 0;
-      let finalAmount = parseFloat(amount);
-
-      if (couponCode) {
-        const cleanCoupon = couponCode.trim().toUpperCase();
-        const couponRecord = await withRetry(() =>
-          prisma.coupon.findUnique({ where: { code: cleanCoupon } })
-        );
-
-        if (couponRecord && couponRecord.active) {
-          const isNotExpired = !couponRecord.expiresAt || new Date(couponRecord.expiresAt) > new Date();
-          const hasRemainingUses = !couponRecord.maxUses || couponRecord.usedCount < couponRecord.maxUses;
-
-          if (isNotExpired && hasRemainingUses) {
-            if (couponRecord.discountType === 'percentage') {
-              discountApplied = (finalAmount * couponRecord.discountValue) / 100;
-            } else {
-              discountApplied = Math.min(couponRecord.discountValue, finalAmount);
-            }
-            finalAmount = Math.max(0, finalAmount - discountApplied);
-
-            // NOTE: coupon usedCount is intentionally NOT incremented here.
-            // It is only incremented in /verify-payment and /callback routes,
-            // AFTER payment is confirmed as paid. This prevents abandoned-order
-            // coupon exhaustion (Bug fix: increment was incorrectly placed here).
-          }
-        }
-      }
-
-      const RAZORPAY_MIN_AMOUNT_INR = 1;
-      if (finalAmount > 0 && finalAmount < RAZORPAY_MIN_AMOUNT_INR) {
-        finalAmount = RAZORPAY_MIN_AMOUNT_INR;
-      }
-
-      if (finalAmount <= 0) {
-        const freeOrderId = `free_promo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-
-        await withRetry(() =>
-          prisma.order.create({
-            data: {
-              razorpayOrderId: freeOrderId,
-              razorpayPaymentId: `free_coupon_applied_${Date.now()}`,
-              razorpaySignature: 'free_checkout_signature',
-              amount: 0,
-              currency: currency || 'INR',
-              status: 'paid',
-              format,
-              templateId,
-              customerName: customerName || null,
-              customerEmail: customerEmail || null,
-              customerPhone: customerPhone || null,
-              couponCode: couponCode || null,
-              discountApplied: parseFloat(amount),
-              referralCode: ref || null,
-            },
-          })
-        );
-
-        const snapshotHtml = html || renderedHtml;
-        if (snapshotHtml) {
-          try {
-            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-            await prisma.downloadSnapshot.create({
-              data: {
-                name: customerName || 'Biodata',
-                format: (format || 'PDF').toUpperCase(),
-                templateId: templateId || null,
-                orderId: freeOrderId,
-                snapshotData: snapshotData || {},
-                renderedHtml: snapshotHtml,
-                expiresAt,
-              },
-            });
-          } catch (snapErr) {
-            app.log.warn('[Create Order] Free promo snapshot save warning:', snapErr.message);
-          }
-        }
-
-        return reply.send({
-          success: true,
-          isFreeOrder: true,
-          order: {
-            id: freeOrderId,
-            amount: 0,
-            currency: currency || 'INR',
-          },
-        });
-      }
-
-      const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
-      const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
-      const isSandbox = !keyId || !keySecret || keyId === 'rzp_test_placeholder' || keySecret === 'placeholder_secret_key';
-
-      if (isSandbox) {
-        const mockOrderId = `mock_order_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-
-        await withRetry(() =>
-          prisma.order.create({
-            data: {
-              razorpayOrderId: mockOrderId,
-              amount: finalAmount,
-              currency: currency || 'INR',
-              status: 'pending',
-              format,
-              templateId,
-              customerName: customerName || null,
-              customerEmail: customerEmail || null,
-              customerPhone: customerPhone || null,
-              couponCode: couponCode || null,
-              discountApplied: discountApplied,
-              referralCode: ref || null,
-            },
-          })
-        );
-
-        const snapshotHtml = html || renderedHtml;
-        if (snapshotHtml) {
-          try {
-            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-            await prisma.downloadSnapshot.create({
-              data: {
-                name: customerName || 'Biodata',
-                format: (format || 'PDF').toUpperCase(),
-                templateId: templateId || null,
-                orderId: mockOrderId,
-                snapshotData: snapshotData || {},
-                renderedHtml: snapshotHtml,
-                expiresAt,
-              },
-            });
-          } catch (snapErr) {
-            app.log.warn('[Create Order] Mock snapshot save warning:', snapErr.message);
-          }
-        }
-
-        return reply.send({
-          success: true,
-          isSandbox: true,
-          order: {
-            id: mockOrderId,
-            amount: Math.round(finalAmount * 100),
-            currency: currency || 'INR',
-          },
-          keyId: 'sandbox_key',
-        });
-      }
-
-      const razorpay = new Razorpay({
-        key_id: keyId,
-        key_secret: keySecret,
-      });
-
-      const amountInPaise = Math.round(finalAmount * 100);
-      const paymentOrder = await razorpay.orders.create({
-        amount: amountInPaise,
-        currency: currency || 'INR',
-        receipt: `receipt_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      });
-
-      await withRetry(() =>
-        prisma.order.create({
-          data: {
-            razorpayOrderId: paymentOrder.id,
-            amount: finalAmount,
-            currency: currency || 'INR',
-            status: 'pending',
-            format,
-            templateId,
-            customerName: customerName || null,
-            customerEmail: customerEmail || null,
-            customerPhone: customerPhone || null,
-            couponCode: couponCode || null,
-            discountApplied: discountApplied,
-            referralCode: ref || null,
-          },
-        })
-      );
-
-      const snapshotHtml = html || renderedHtml;
-      if (snapshotHtml) {
-        try {
-          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-          const snap = await prisma.downloadSnapshot.create({
-            data: {
-              name: customerName || 'Biodata',
-              format: (format || 'PDF').toUpperCase(),
-              templateId: templateId || null,
-              orderId: paymentOrder.id,
-              snapshotData: snapshotData || {},
-              renderedHtml: snapshotHtml,
-              expiresAt,
-            },
-          });
-          if (redis && redis.status === 'ready') {
-            await redis.set(
-              `snapshot:${paymentOrder.id}`,
-              JSON.stringify({
-                id: snap.id,
-                name: snap.name,
-                format: snap.format,
-                templateId,
-                orderId: paymentOrder.id,
-                snapshotData,
-                renderedHtml: snapshotHtml,
-                expiresAt: expiresAt.toISOString(),
-              }),
-              'EX',
-              86400
-            ).catch(() => {});
-          }
-        } catch (snapErr) {
-          app.log.warn('[Create Order] Live snapshot pre-save warning:', snapErr.message);
-        }
-      }
-
-      return reply.send({
-        success: true,
-        isSandbox: false,
-        order: paymentOrder,
-        keyId: keyId,
-      });
-    } catch (error) {
-      app.log.error('Create Razorpay Order Error:', error);
-      return reply.status(500).send({ error: 'Failed to create order', details: error.message });
-    }
+  // NOTE: /api/razorpay/create-order is deprecated — Cashfree handles this via /api/cashfree/create-order
+  // This endpoint is kept as a stub returning 410 Gone to gracefully handle any lingering old requests.
+  app.post('/api/razorpay/create-order', async (_request, reply) => {
+    return reply.status(410).send({ error: 'Razorpay has been removed. Please use Cashfree checkout.' });
   });
 
-  // 4. POST /api/razorpay/verify-payment
-  app.post('/api/razorpay/verify-payment', async (request, reply) => {
-    try {
-      const {
-        razorpay_order_id,
-        razorpay_payment_id,
-        razorpay_signature,
-        razorpay_contact,
-        razorpay_email,
-        isSandbox,
-      } = request.body || {};
+  // NOTE: /api/razorpay/verify-payment deprecated stub
+  app.post('/api/razorpay/verify-payment', async (_request, reply) => {
+    return reply.status(410).send({ error: 'Razorpay has been removed. Please use Cashfree checkout.' });
+  });
 
-      if (!razorpay_order_id) {
-        return reply.status(400).send({ error: 'Order ID is required' });
-      }
-
-      const buildContactUpdate = (email, phone) => {
-        const update = {};
-        if (phone) update.customerPhone = String(phone).replace(/\D/g, '').slice(-10);
-        if (email && email.includes('@')) update.customerEmail = String(email).trim();
-        return update;
-      };
-
-      const isProduction = process.env.NODE_ENV === 'production';
-      const allowMock = !isProduction && (isSandbox === true || razorpay_order_id.startsWith('mock_order_'));
-
-      if (allowMock) {
-        const contactUpdate = buildContactUpdate(razorpay_email, razorpay_contact);
-
-        const updatedOrder = await withRetry(() =>
-          prisma.order.update({
-            where: { razorpayOrderId: razorpay_order_id },
-            data: {
-              status: 'paid',
-              razorpayPaymentId: razorpay_payment_id || `mock_pay_${Date.now()}`,
-              razorpaySignature: razorpay_signature || 'mock_signature',
-              ...contactUpdate,
-            },
-          })
-        );
-
-        if (updatedOrder.referralCode) {
-          await createCommissionForOrder(updatedOrder, app);
-        }
-
-        return reply.send({
-          success: true,
-          message: 'Sandbox payment verified successfully',
-          order: updatedOrder,
-        });
-      }
-
-      if (!razorpay_payment_id || !razorpay_signature) {
-        return reply.status(400).send({ error: 'Payment ID and signature are required for live verification' });
-      }
-
-      const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
-      if (!keySecret) {
-        app.log.error('RAZORPAY_KEY_SECRET is not configured on server');
-        return reply.status(500).send({ error: 'Payment gateway configuration error' });
-      }
-
-      const expectedSignature = crypto
-        .createHmac('sha256', keySecret)
-        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-        .digest('hex');
-
-      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
-      const signatureBuffer = Buffer.from(razorpay_signature, 'utf8');
-      const isSignatureValid =
-        expectedBuffer.length === signatureBuffer.length &&
-        crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
-
-      if (!isSignatureValid) {
-        await withRetry(() =>
-          prisma.order.update({
-            where: { razorpayOrderId: razorpay_order_id },
-            data: { status: 'failed' },
-          })
-        ).catch((e) => console.error('Failed to mark order as failed:', e));
-
-        return reply.status(400).send({ error: 'Invalid payment signature' });
-      }
-
-      let confirmedEmail = razorpay_email || undefined;
-      let confirmedPhone = razorpay_contact || undefined;
-
-      try {
-        const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
-        if (keyId && keySecret) {
-          const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
-          const payment = await rzp.payments.fetch(razorpay_payment_id);
-          if (payment?.email && payment.email.includes('@')) {
-            confirmedEmail = payment.email;
-          }
-          if (payment?.contact) {
-            confirmedPhone = String(payment.contact).replace(/\D/g, '').slice(-10);
-          }
-        }
-      } catch (fetchErr) {
-        console.warn('[verify-payment] Could not fetch payment details from Razorpay:', fetchErr.message);
-      }
-
-      const contactUpdate = buildContactUpdate(confirmedEmail, confirmedPhone);
-
-      const updatedOrder = await withRetry(() =>
-        prisma.order.update({
-          where: { razorpayOrderId: razorpay_order_id },
-          data: {
-            status: 'paid',
-            razorpayPaymentId: razorpay_payment_id,
-            razorpaySignature: razorpay_signature,
-            ...contactUpdate,
-          },
-        })
-      );
-
-      // Increment coupon usedCount HERE (after real payment confirmation) —
-      // not during order creation, to prevent abandoned-order coupon exhaustion
-      if (updatedOrder.couponCode) {
-        withRetry(() =>
-          prisma.coupon.updateMany({
-            where: { code: updatedOrder.couponCode },
-            data: { usedCount: { increment: 1 } },
-          })
-        ).catch((e) => console.error('[verify-payment] Failed to increment coupon usedCount:', e));
-      }
-
-      if (updatedOrder.referralCode) {
-        await createCommissionForOrder(updatedOrder, app);
-      }
-
-      return reply.send({
-        success: true,
-        message: 'Payment verified and completed successfully',
-        order: updatedOrder,
-      });
-    } catch (error) {
-      app.log.error('Verify Payment Error:', error);
-      return reply.status(500).send({ error: 'Payment verification failed', details: error.message });
+  // NOTE: /api/razorpay/callback deprecated stub
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/api/razorpay/callback',
+    handler: async (_request, reply) => {
+      const clientUrl = process.env.CLIENT_URL || 'https://biodata99.com';
+      return reply.redirect(`${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Razorpay has been removed. Please retry with Cashfree.')}`, 303);
     }
   });
 
@@ -607,82 +236,6 @@ export default async function routes(app, options) {
         }
       }
 
-      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_') && !order.razorpayOrderId.startsWith('cf_')) {
-        try {
-          const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
-          const keySecret = process.env.RAZORPAY_KEY_SECRET;
-          if (keyId && keySecret) {
-            const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
-            const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
-            let capturedPayment = payments?.items?.find((p) => p.status === 'captured');
-            if (!capturedPayment) {
-              const authorizedPayment = payments?.items?.find((p) => p.status === 'authorized');
-              if (authorizedPayment) {
-                try {
-                  capturedPayment = await rzp.payments.capture(authorizedPayment.id, authorizedPayment.amount, authorizedPayment.currency);
-                } catch (capErr) {
-                  app.log.warn('[order-status] Auto-capture attempt error:', capErr.message);
-                  capturedPayment = authorizedPayment;
-                }
-              }
-            }
-            if (capturedPayment) {
-              const contactUpdate = {};
-              if (capturedPayment.contact) {
-                contactUpdate.customerPhone = String(capturedPayment.contact).replace(/\D/g, '').slice(-10);
-              }
-              if (capturedPayment.email && capturedPayment.email.includes('@')) {
-                contactUpdate.customerEmail = String(capturedPayment.email).trim();
-              }
-
-              order = await withRetry(() =>
-                prisma.order.update({
-                  where: { id: order.id },
-                  data: {
-                    status: 'paid',
-                    razorpayPaymentId: capturedPayment.id,
-                    ...contactUpdate,
-                  },
-                })
-              );
-
-              if (order.couponCode) {
-                withRetry(() =>
-                  prisma.coupon.updateMany({
-                    where: { code: order.couponCode },
-                    data: { usedCount: { increment: 1 } },
-                  })
-                ).catch((e) => app.log.warn('[order-status] Coupon update failed:', e.message));
-              }
-
-              if (order.referralCode) {
-                createCommissionForOrder(order, app).catch((e) =>
-                  app.log.warn('[order-status] Commission calculation error:', e.message)
-                );
-              }
-
-              if (redis && redis.status === 'ready') {
-                redis.del('admin:dashboard-stats').catch(() => {});
-              }
-
-              return reply.send({
-                success: true,
-                status: 'paid',
-                order: {
-                  id: order.id,
-                  razorpayOrderId: order.razorpayOrderId,
-                  razorpayPaymentId: order.razorpayPaymentId,
-                  status: 'paid',
-                  format: order.format,
-                  customerName: order.customerName,
-                },
-              });
-            }
-          }
-        } catch (fetchErr) {
-          app.log.warn(`[order-status] Razorpay query error for ${order.razorpayOrderId}: ${fetchErr.message}`);
-        }
-      }
 
       return reply.send({
         success: true,
@@ -700,105 +253,8 @@ export default async function routes(app, options) {
     }
   });
 
-  // 6. POST & GET /api/razorpay/callback (For mobile app-switch & redirect payments like PhonePe, GPay)
-  app.route({
-    method: ['GET', 'POST'],
-    url: '/api/razorpay/callback',
-    handler: async (request, reply) => {
-      let clientUrl = process.env.CLIENT_URL || 'https://biodata99.com';
-      try {
-        const body = request.body || {};
-        const query = request.query || {};
+  // 6. Razorpay callback — now a 410 stub (duplicate of stubs above, kept for belt-and-suspenders)
 
-        const candidateOrigin = query.client_origin || body.client_origin;
-        if (candidateOrigin) {
-          try {
-            const parsed = new URL(candidateOrigin);
-            if (
-              parsed.hostname === 'biodata99.com' ||
-              parsed.hostname.endsWith('.biodata99.com') ||
-              parsed.hostname === 'localhost' ||
-              parsed.hostname === '127.0.0.1'
-            ) {
-              clientUrl = candidateOrigin.replace(/\/+$/, '');
-            }
-          } catch {}
-        }
-
-        const razorpay_order_id = body.razorpay_order_id || query.razorpay_order_id;
-        const razorpay_payment_id = body.razorpay_payment_id || query.razorpay_payment_id;
-        const razorpay_signature = body.razorpay_signature || query.razorpay_signature;
-        const errorCode = body['error[code]'] || query['error[code]'];
-        const errorDescription = body['error[description]'] || query['error[description]'];
-
-        if (errorCode || !razorpay_payment_id || !razorpay_signature) {
-          const errorMsg = errorDescription || 'Payment was cancelled or could not be completed';
-          // Redirect to dedicated /payment-processing page for rich UX (step indicators, retry, confetti)
-          const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id || '')}&status=failed&error=${encodeURIComponent(errorMsg)}`;
-          return reply.redirect(failRedirect, 303);
-        }
-
-        const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
-        let isVerified = false;
-
-        if (keySecret) {
-          const generatedSignature = crypto
-            .createHmac('sha256', keySecret)
-            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-            .digest('hex');
-
-          const genBuf = Buffer.from(generatedSignature, 'utf8');
-          const signBuf = Buffer.from(razorpay_signature, 'utf8');
-          isVerified = genBuf.length === signBuf.length && crypto.timingSafeEqual(genBuf, signBuf);
-        } else {
-          isVerified = process.env.NODE_ENV !== 'production';
-        }
-
-        if (!isVerified) {
-          const failRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=failed&error=${encodeURIComponent('Payment signature verification failed')}`;
-          return reply.redirect(failRedirect, 303);
-        }
-
-        const updatedOrder = await withRetry(() =>
-          prisma.order.update({
-            where: { razorpayOrderId: razorpay_order_id },
-            data: {
-              status: 'paid',
-              razorpayPaymentId: razorpay_payment_id,
-              razorpaySignature: razorpay_signature,
-            },
-          })
-        );
-
-        // Increment coupon usedCount HERE (after real payment confirmation via server callback)
-        if (updatedOrder?.couponCode) {
-          withRetry(() =>
-            prisma.coupon.updateMany({
-              where: { code: updatedOrder.couponCode },
-              data: { usedCount: { increment: 1 } },
-            })
-          ).catch((e) => app.log.warn('[callback] Failed to increment coupon usedCount:', e));
-        }
-
-        if (updatedOrder?.referralCode) {
-          createCommissionForOrder(updatedOrder, app).catch((e) =>
-            app.log.warn('Commission error in callback:', e.message)
-          );
-        }
-
-        if (redis && redis.status === 'ready') {
-          redis.del('admin:dashboard-stats').catch(() => {});
-        }
-
-        // Redirect to dedicated /payment-processing page — rich animated UX with steps, confetti, retry
-        const successRedirect = `${clientUrl}/payment-processing?order_id=${encodeURIComponent(razorpay_order_id)}&status=success`;
-        return reply.redirect(successRedirect, 303);
-      } catch (error) {
-        app.log.error('Razorpay callback error:', error);
-        return reply.redirect(`${clientUrl}/payment-processing?status=failed&error=${encodeURIComponent('Unexpected payment callback error')}`, 303);
-      }
-    }
-  });
 
   // 7. GET /api/payment/download-paid-order/:orderId
   // Zero-click auto-download endpoint for verified paid orders
@@ -822,8 +278,8 @@ export default async function routes(app, options) {
         return reply.status(404).send({ error: 'Order not found' });
       }
 
-      // Zero-Failure Safety Net: If order is not marked paid yet, check gateway directly
-      if (order.status !== 'paid' && order.razorpayOrderId && order.razorpayOrderId.startsWith('cf_')) {
+      // Cashfree Safety Net: If order is not marked paid yet, check Cashfree directly
+      if (order.status !== 'paid' && order.razorpayOrderId) {
         try {
           const cfConfig = getCashfreeConfig();
           if (cfConfig.isConfigured) {
@@ -840,40 +296,6 @@ export default async function routes(app, options) {
           }
         } catch (cfErr) {
           app.log.warn('[download-paid-order] Cashfree auto-verify warn:', cfErr.message);
-        }
-      }
-
-      if (order.status !== 'paid' && order.razorpayOrderId && !order.razorpayOrderId.startsWith('mock_') && !order.razorpayOrderId.startsWith('cf_')) {
-        try {
-          const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
-          const keySecret = process.env.RAZORPAY_KEY_SECRET;
-          if (keyId && keySecret) {
-            const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
-            const payments = await rzp.orders.fetchPayments(order.razorpayOrderId);
-            let capturedPayment = payments?.items?.find((p) => p.status === 'captured');
-            if (!capturedPayment) {
-              const authorizedPayment = payments?.items?.find((p) => p.status === 'authorized');
-              if (authorizedPayment) {
-                try {
-                  capturedPayment = await rzp.payments.capture(authorizedPayment.id, authorizedPayment.amount, authorizedPayment.currency);
-                } catch (capErr) {
-                  app.log.warn('[download-paid-order] Auto-capture attempt error:', capErr.message);
-                  capturedPayment = authorizedPayment;
-                }
-              }
-            }
-            if (capturedPayment) {
-              order = await prisma.order.update({
-                where: { id: order.id },
-                data: {
-                  status: 'paid',
-                  razorpayPaymentId: capturedPayment.id,
-                },
-              });
-            }
-          }
-        } catch (fetchErr) {
-          app.log.warn('Auto-verify check error:', fetchErr.message);
         }
       }
 

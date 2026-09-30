@@ -1,3 +1,4 @@
+import zlib from 'zlib';
 import { prisma, withRetry } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import {
@@ -41,6 +42,90 @@ async function createCommissionForOrder(order, app) {
     });
   } catch (err) {
     app.log.warn('[Cashfree Commission] Failed to record commission:', err.message);
+  }
+}
+
+// Snapshot helper for instant post-payment generation
+async function saveDownloadSnapshotHelper({
+  orderId,
+  customerName,
+  format,
+  templateId,
+  snapshotData,
+  snapshotHtml,
+  isGzipped,
+  app,
+}) {
+  if (!orderId || !snapshotHtml) return null;
+  try {
+    let finalHtml = snapshotHtml;
+    if (isGzipped) {
+      try {
+        const buf = Buffer.from(snapshotHtml, 'base64');
+        finalHtml = zlib.gunzipSync(buf).toString('utf-8');
+      } catch (gzipErr) {
+        app?.log?.warn?.('[Cashfree Snapshot Save] Gzip decompression failed, using raw:', gzipErr.message);
+      }
+    }
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const existing = await withRetry(() =>
+      prisma.downloadSnapshot.findFirst({
+        where: { orderId },
+        select: { id: true },
+      })
+    );
+
+    let snap;
+    if (existing) {
+      snap = await withRetry(() =>
+        prisma.downloadSnapshot.update({
+          where: { id: existing.id },
+          data: {
+            renderedHtml: finalHtml,
+            snapshotData: snapshotData || {},
+            expiresAt,
+          },
+        })
+      );
+    } else {
+      snap = await withRetry(() =>
+        prisma.downloadSnapshot.create({
+          data: {
+            name: customerName || 'Biodata',
+            format: (format || 'PDF').toUpperCase(),
+            templateId: templateId || null,
+            orderId,
+            snapshotData: snapshotData || {},
+            renderedHtml: finalHtml,
+            expiresAt,
+          },
+        })
+      );
+    }
+
+    if (redis && redis.status === 'ready') {
+      await redis.set(
+        `snapshot:${orderId}`,
+        JSON.stringify({
+          id: snap.id,
+          name: snap.name,
+          format: snap.format,
+          templateId,
+          orderId,
+          snapshotData,
+          renderedHtml: finalHtml,
+          expiresAt: expiresAt.toISOString(),
+        }),
+        'EX',
+        86400
+      ).catch(() => {});
+    }
+
+    return snap;
+  } catch (snapErr) {
+    app?.log?.warn?.('[Cashfree Snapshot Save] Warning:', snapErr.message);
+    return null;
   }
 }
 
@@ -203,24 +288,28 @@ export default async function cashfreeRoutes(app, options) {
           })
         );
 
+        // Increment coupon used count for 100% discount promo orders
+        if (couponCode) {
+          const cleanCoupon = couponCode.trim().toUpperCase();
+          withRetry(() =>
+            prisma.coupon.updateMany({
+              where: { code: cleanCoupon },
+              data: { usedCount: { increment: 1 } },
+            })
+          ).catch(() => {});
+        }
+
         const snapshotHtml = html || renderedHtml;
         if (snapshotHtml) {
-          try {
-            const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-            await prisma.downloadSnapshot.create({
-              data: {
-                name: customerName || 'Biodata',
-                format: (format || 'PDF').toUpperCase(),
-                templateId: templateId || null,
-                orderId: freeOrderId,
-                snapshotData: snapshotData || {},
-                renderedHtml: snapshotHtml,
-                expiresAt,
-              },
-            });
-          } catch (snapErr) {
-            app.log.warn('[Cashfree Create Order] Free promo snapshot save warning:', snapErr.message);
-          }
+          saveDownloadSnapshotHelper({
+            orderId: freeOrderId,
+            customerName,
+            format,
+            templateId,
+            snapshotData,
+            snapshotHtml,
+            app,
+          }).catch(() => {});
         }
 
         return reply.send({
@@ -237,66 +326,41 @@ export default async function cashfreeRoutes(app, options) {
       const config = getCashfreeConfig();
       const orderId = `cf_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
-      // Save pending order to database
-      await withRetry(() =>
-        prisma.order.create({
-          data: {
-            razorpayOrderId: orderId, // stored in primary order reference
-            amount: finalAmount,
-            currency,
-            status: 'pending',
-            format,
-            templateId,
-            customerName: customerName || null,
-            customerEmail: customerEmail || null,
-            customerPhone: customerPhone || null,
-            couponCode: couponCode || null,
-            discountApplied,
-            referralCode: ref || null,
-          },
-        })
-      );
-
-      // Pre-save snapshot for instant post-payment generation
+      // Pre-save snapshot if provided directly (non-blocking fire-and-forget)
       const snapshotHtml = html || renderedHtml;
       if (snapshotHtml) {
-        try {
-          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-          const snap = await prisma.downloadSnapshot.create({
-            data: {
-              name: customerName || 'Biodata',
-              format: (format || 'PDF').toUpperCase(),
-              templateId: templateId || null,
-              orderId,
-              snapshotData: snapshotData || {},
-              renderedHtml: snapshotHtml,
-              expiresAt,
-            },
-          });
-          if (redis && redis.status === 'ready') {
-            await redis.set(
-              `snapshot:${orderId}`,
-              JSON.stringify({
-                id: snap.id,
-                name: snap.name,
-                format: snap.format,
-                templateId,
-                orderId,
-                snapshotData,
-                renderedHtml: snapshotHtml,
-                expiresAt: expiresAt.toISOString(),
-              }),
-              'EX',
-              86400
-            ).catch(() => { });
-          }
-        } catch (snapErr) {
-          app.log.warn('[Cashfree Create Order] Snapshot save warning:', snapErr.message);
-        }
+        saveDownloadSnapshotHelper({
+          orderId,
+          customerName,
+          format,
+          templateId,
+          snapshotData,
+          snapshotHtml,
+          app,
+        }).catch(() => {});
       }
 
       // If Cashfree keys are not configured yet, offer the simulated sandbox mode
       if (!config.isConfigured) {
+        await withRetry(() =>
+          prisma.order.create({
+            data: {
+              razorpayOrderId: orderId,
+              amount: finalAmount,
+              currency,
+              status: 'pending',
+              format,
+              templateId,
+              customerName: customerName || null,
+              customerEmail: customerEmail || null,
+              customerPhone: customerPhone || null,
+              couponCode: couponCode || null,
+              discountApplied,
+              referralCode: ref || null,
+            },
+          })
+        );
+
         return reply.send({
           success: true,
           isSandbox: true,
@@ -325,22 +389,41 @@ export default async function cashfreeRoutes(app, options) {
       const returnUrl = `${serverBaseUrl}/api/cashfree/callback?order_id={order_id}&client_origin=${encodeURIComponent(cleanOrigin)}`;
       const notifyUrl = `${serverBaseUrl}/api/cashfree/webhook`;
 
-      const cashfreeOrder = await createCashfreeOrder({
-        orderId,
-        orderAmount: finalAmount,
-        orderCurrency: currency,
-        customerDetails: {
-          customer_id: customerPhone ? `cust_${customerPhone.slice(-10)}` : `cust_${Date.now()}`,
-          customer_name: customerName || 'Customer',
-          customer_email: customerEmail || '',
-          customer_phone: customerPhone || '',
-        },
-        orderMeta: {
-          return_url: returnUrl,
-          notify_url: notifyUrl,
-        },
-        orderNote: `Biodata download: ${format.toUpperCase()}`,
-      });
+      // Parallel DB write + Cashfree API call for ultra-fast response
+      const [dbOrder, cashfreeOrder] = await Promise.all([
+        withRetry(() =>
+          prisma.order.create({
+            data: {
+              razorpayOrderId: orderId, // stored in primary order reference
+              amount: finalAmount,
+              currency,
+              status: 'pending',
+              format,
+              templateId,
+              customerName: customerName || null,
+              customerEmail: customerEmail || null,
+              customerPhone: customerPhone || null,
+              couponCode: couponCode || null,
+              discountApplied,
+              referralCode: ref || null,
+            },
+          })
+        ),
+        createCashfreeOrder({
+          orderId,
+          orderAmount: finalAmount,
+          orderCurrency: currency,
+          customerDetails: {
+            customer_id: customerPhone ? `cust_${customerPhone.slice(-10)}` : `cust_${Date.now()}`,
+            customer_phone: customerPhone || '',
+          },
+          orderMeta: {
+            return_url: returnUrl,
+            notify_url: notifyUrl,
+          },
+          orderNote: `Biodata download: ${format.toUpperCase()}`,
+        }),
+      ]);
 
       return reply.send({
         success: true,
@@ -356,7 +439,62 @@ export default async function cashfreeRoutes(app, options) {
       });
     } catch (error) {
       app.log.error('[Cashfree] Create Order Error:', error);
+
+      // Clean up orphaned pending order on Cashfree order creation failure
+      if (typeof orderId !== 'undefined' && orderId) {
+        withRetry(() =>
+          prisma.order.updateMany({
+            where: { razorpayOrderId: orderId, status: 'pending' },
+            data: {
+              status: 'failed',
+              downloadErrorMsg: String(error?.message || 'Cashfree session creation failed').slice(0, 500),
+            },
+          })
+        ).catch(() => {});
+      }
+
       return reply.status(500).send({ error: 'Failed to create Cashfree order', details: error.message });
+    }
+  });
+
+  // 2.5 POST /api/cashfree/save-snapshot (Non-blocking background snapshot)
+  app.post('/api/cashfree/save-snapshot', async (request, reply) => {
+    try {
+      const {
+        orderId,
+        html,
+        renderedHtml,
+        snapshotData,
+        customerName,
+        format,
+        templateId,
+        isGzipped,
+      } = request.body || {};
+
+      if (!orderId) {
+        return reply.status(400).send({ error: 'orderId is required' });
+      }
+
+      const snapshotHtml = html || renderedHtml;
+      if (!snapshotHtml) {
+        return reply.send({ success: true, message: 'No html content provided' });
+      }
+
+      const snap = await saveDownloadSnapshotHelper({
+        orderId,
+        customerName,
+        format,
+        templateId,
+        snapshotData,
+        snapshotHtml,
+        isGzipped,
+        app,
+      });
+
+      return reply.send({ success: true, snapshotId: snap?.id || null });
+    } catch (err) {
+      app.log.warn('[Cashfree Snapshot Save] Error:', err.message);
+      return reply.status(500).send({ error: 'Failed to save snapshot', details: err.message });
     }
   });
 

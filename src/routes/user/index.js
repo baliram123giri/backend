@@ -150,7 +150,7 @@ app.post('/api/feedback', {
             },
           });
           if (matchingOrder) {
-            resolvedOrderId = matchingOrder.razorpayOrderId;
+            resolvedOrderId = matchingOrder.razorpayOrderId || matchingOrder.id;
           }
         } catch (findErr) {
           console.warn('Failed to resolve missing order ID in download log:', findErr.message);
@@ -259,7 +259,7 @@ app.post('/api/feedback', {
 
       if (resolvedOrderId && resolvedOrderId !== 'sandbox' && resolvedOrderId !== 'dev_bypass') {
         try {
-          await prisma.order.update({
+          await prisma.order.updateMany({
             where: { razorpayOrderId: resolvedOrderId },
             data: { downloadStatus: status === 'failed' ? 'failed' : 'success' },
           });

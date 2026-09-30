@@ -54,21 +54,20 @@ export async function createCashfreeOrder({
 
   // Sanitize customer details per Cashfree API specification
   const rawPhone = (customerDetails?.customer_phone || '').replace(/\D/g, '');
+  // Cashfree requires a valid 10-digit number. Fall back to placeholder if missing or invalid.
   const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : '9999999999';
-  const cleanEmail = (customerDetails?.customer_email || 'support@biodata99.com').trim();
-  const cleanName = (customerDetails?.customer_name || 'Customer').trim().slice(0, 100);
   const cleanCustomerId = (customerDetails?.customer_id || `cust_${Date.now()}`)
     .replace(/[^a-zA-Z0-9_-]/g, '_')
     .slice(0, 50);
 
+  // Cashfree API strictly requires customer_id and customer_phone.
+  // We intentionally omit customer_name and customer_email so Cashfree does NOT display any customer info on the payment screen.
   const payload = {
     order_id: String(orderId).slice(0, 50),
     order_amount: Number(orderAmount.toFixed(2)),
     order_currency: orderCurrency,
     customer_details: {
       customer_id: cleanCustomerId,
-      customer_name: cleanName,
-      customer_email: cleanEmail,
       customer_phone: cleanPhone,
     },
     order_meta: {
