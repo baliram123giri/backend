@@ -255,11 +255,18 @@ export async function setupPageSecurity(page) {
       }
 
       // Block file: protocol and any non-http(s) schemes immediately (prevents LFI)
-      if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+      // Allow relative/about asset paths for fonts/frames/stickers
+      const isKnownStaticAsset =
+        urlStr.includes('/fonts/') ||
+        urlStr.includes('/frames/') ||
+        urlStr.includes('/stickers/') ||
+        urlStr.includes('/thumbnails/');
+
+      if (!isKnownStaticAsset && !urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
         return req.abort('blockedbyclient').catch(() => {});
       }
 
-      const parsedUrl = new URL(urlStr);
+      const parsedUrl = new URL(urlStr.startsWith('http') ? urlStr : `https://biodata99.com/${urlStr.replace(/^about:\/?\/?/, '')}`);
       const hostname = parsedUrl.hostname.toLowerCase();
       const port = parsedUrl.port ? Number(parsedUrl.port) : (parsedUrl.protocol === 'https:' ? 443 : 80);
       const pathname = decodeURIComponent(parsedUrl.pathname);
@@ -276,7 +283,10 @@ export async function setupPageSecurity(page) {
       }
 
       // 1a. Directly fulfill local static assets from memory or disk (0ms latency, works for dev & production)
-      const cleanRelPath = pathname.replace(/^\/+/, '');
+      const cleanRelPath = pathname
+        .replace(/^\/+/, '')
+        .replace(/^(?:biodata|matrimonial)\/+/, '');
+
       if (assetBufferCache.has(cleanRelPath)) {
         const cached = assetBufferCache.get(cleanRelPath);
         return req.respond({
@@ -288,18 +298,23 @@ export async function setupPageSecurity(page) {
       }
 
       for (const dir of candidatePublicDirs) {
-        const localPath = path.join(dir, cleanRelPath);
-        if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
-          const ext = path.extname(localPath).toLowerCase();
-          const contentType = mimeMap[ext] || 'application/octet-stream';
-          const fileBuffer = fs.readFileSync(localPath);
-          assetBufferCache.set(cleanRelPath, { contentType, body: fileBuffer });
-          return req.respond({
-            status: 200,
-            contentType,
-            headers: { 'Access-Control-Allow-Origin': '*' },
-            body: fileBuffer,
-          }).catch(() => {});
+        const testPaths = [
+          path.join(dir, cleanRelPath),
+          path.join(dir, cleanRelPath.replace(/^assets\/+/, '')),
+        ];
+        for (const localPath of testPaths) {
+          if (fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+            const ext = path.extname(localPath).toLowerCase();
+            const contentType = mimeMap[ext] || 'application/octet-stream';
+            const fileBuffer = fs.readFileSync(localPath);
+            assetBufferCache.set(cleanRelPath, { contentType, body: fileBuffer });
+            return req.respond({
+              status: 200,
+              contentType,
+              headers: { 'Access-Control-Allow-Origin': '*' },
+              body: fileBuffer,
+            }).catch(() => {});
+          }
         }
       }
 
