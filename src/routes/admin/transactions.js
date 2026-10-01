@@ -123,6 +123,8 @@ export default async function adminTransactionsRoutes(app, options) {
             return {
               id: log.id,
               orderId: null,
+              cashfreeOrderId: null,
+              cashfreePaymentId: null,
               razorpayOrderId: null,
               razorpayPaymentId: null,
               amount: 0,
@@ -172,6 +174,8 @@ export default async function adminTransactionsRoutes(app, options) {
             return {
               id: order.id,
               orderId: order.razorpayOrderId,
+              cashfreeOrderId: order.razorpayOrderId,
+              cashfreePaymentId: order.razorpayPaymentId,
               razorpayOrderId: order.razorpayOrderId,
               razorpayPaymentId: order.razorpayPaymentId,
               amount: Number((order.amount || 0).toFixed(2)),
@@ -227,6 +231,8 @@ export default async function adminTransactionsRoutes(app, options) {
             return {
               id: order.id,
               orderId: order.razorpayOrderId,
+              cashfreeOrderId: order.razorpayOrderId,
+              cashfreePaymentId: order.razorpayPaymentId,
               razorpayOrderId: order.razorpayOrderId,
               razorpayPaymentId: order.razorpayPaymentId,
               amount: Number((order.amount || 0).toFixed(2)),
@@ -257,6 +263,8 @@ export default async function adminTransactionsRoutes(app, options) {
             return {
               id: log.id,
               orderId: null,
+              cashfreeOrderId: null,
+              cashfreePaymentId: null,
               razorpayOrderId: null,
               razorpayPaymentId: null,
               amount: 0,

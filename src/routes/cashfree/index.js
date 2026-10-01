@@ -1,6 +1,6 @@
 import zlib from 'zlib';
 import { prisma, withRetry } from '../../lib/prisma.js';
-import { redis } from '../../lib/redis.js';
+import { getCachedOrFetch, redis } from '../../lib/redis.js';
 import {
   getCashfreeConfig,
   createCashfreeOrder,
@@ -69,39 +69,52 @@ async function saveDownloadSnapshotHelper({
     }
 
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const existing = await withRetry(() =>
-      prisma.downloadSnapshot.findFirst({
-        where: { orderId },
-        select: { id: true },
-      })
-    );
+    const dbSaveOperation = async () => {
+      const existing = await withRetry(() =>
+        prisma.downloadSnapshot.findFirst({
+          where: { orderId },
+          select: { id: true },
+        })
+      );
 
-    let snap;
-    if (existing) {
-      snap = await withRetry(() =>
-        prisma.downloadSnapshot.update({
-          where: { id: existing.id },
-          data: {
-            renderedHtml: finalHtml,
-            snapshotData: snapshotData || {},
-            expiresAt,
-          },
-        })
-      );
-    } else {
-      snap = await withRetry(() =>
-        prisma.downloadSnapshot.create({
-          data: {
-            name: customerName || 'Biodata',
-            format: (format || 'PDF').toUpperCase(),
-            templateId: templateId || null,
-            orderId,
-            snapshotData: snapshotData || {},
-            renderedHtml: finalHtml,
-            expiresAt,
-          },
-        })
-      );
+      let snap;
+      if (existing) {
+        snap = await withRetry(() =>
+          prisma.downloadSnapshot.update({
+            where: { id: existing.id },
+            data: {
+              renderedHtml: finalHtml,
+              snapshotData: snapshotData || {},
+              expiresAt,
+            },
+          })
+        );
+      } else {
+        snap = await withRetry(() =>
+          prisma.downloadSnapshot.create({
+            data: {
+              name: customerName || 'Biodata',
+              format: (format || 'PDF').toUpperCase(),
+              templateId: templateId || null,
+              orderId,
+              snapshotData: snapshotData || {},
+              renderedHtml: finalHtml,
+              expiresAt,
+            },
+          })
+        );
+      }
+      return snap;
+    };
+
+    let snap = null;
+    try {
+      snap = await Promise.race([
+        dbSaveOperation(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Snapshot DB save timeout (3500ms)')), 3500)),
+      ]);
+    } catch (dbErr) {
+      app?.log?.warn?.('[Cashfree Snapshot Save] DB save timed out or failed (non-blocking):', dbErr.message);
     }
 
     if (redis && redis.status === 'ready') {
@@ -142,23 +155,27 @@ export default async function cashfreeRoutes(app, options) {
     });
   });
 
-  // 1.5 GET /api/cashfree/active-coupons
+  // 1.5 GET /api/cashfree/active-coupons (Cached 5 mins via L1 memory + L2 Redis)
   app.get('/api/cashfree/active-coupons', async (request, reply) => {
     try {
-      const coupons = await prisma.coupon.findMany({
-        where: {
-          active: true,
-          isPublic: true,
-          OR: [
-            { expiresAt: null },
-            { expiresAt: { gt: new Date() } },
-          ],
-        },
-        orderBy: { createdAt: 'desc' },
+      const validCoupons = await getCachedOrFetch('active-coupons', 300, async () => {
+        const coupons = await withRetry(() =>
+          prisma.coupon.findMany({
+            where: {
+              active: true,
+              isPublic: true,
+              OR: [
+                { expiresAt: null },
+                { expiresAt: { gt: new Date() } },
+              ],
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        );
+        return coupons.filter(
+          (c) => c.maxUses === null || c.usedCount < c.maxUses
+        );
       });
-      const validCoupons = coupons.filter(
-        (c) => c.maxUses === null || c.usedCount < c.maxUses
-      );
       return reply.send({ success: true, coupons: validCoupons });
     } catch (error) {
       app.log.error('Cashfree GET active coupons error:', error);
@@ -166,7 +183,7 @@ export default async function cashfreeRoutes(app, options) {
     }
   });
 
-  // 1.6 POST /api/cashfree/validate-coupon
+  // 1.6 POST /api/cashfree/validate-coupon (Instant 1-2ms cache verification)
   app.post('/api/cashfree/validate-coupon', async (request, reply) => {
     try {
       const { code } = request.body || {};
@@ -175,8 +192,12 @@ export default async function cashfreeRoutes(app, options) {
       }
 
       const cleanCode = code.trim().toUpperCase();
-      const coupon = await prisma.coupon.findUnique({
-        where: { code: cleanCode },
+      const coupon = await getCachedOrFetch(`coupon:${cleanCode}`, 300, async () => {
+        return withRetry(() =>
+          prisma.coupon.findUnique({
+            where: { code: cleanCode },
+          })
+        );
       });
 
       if (!coupon) {
@@ -457,7 +478,7 @@ export default async function cashfreeRoutes(app, options) {
     }
   });
 
-  // 2.5 POST /api/cashfree/save-snapshot (Non-blocking background snapshot)
+  // 2.5 POST /api/cashfree/save-snapshot (Ultra-fast non-blocking background snapshot)
   app.post('/api/cashfree/save-snapshot', async (request, reply) => {
     try {
       const {
@@ -480,18 +501,29 @@ export default async function cashfreeRoutes(app, options) {
         return reply.send({ success: true, message: 'No html content provided' });
       }
 
-      const snap = await saveDownloadSnapshotHelper({
-        orderId,
-        customerName,
-        format,
-        templateId,
-        snapshotData,
-        snapshotHtml,
-        isGzipped,
-        app,
-      });
+      // 1. Immediately acknowledge 200 OK in ~5ms so client download is never blocked
+      reply.status(200).send({ success: true, accepted: true });
 
-      return reply.send({ success: true, snapshotId: snap?.id || null });
+      // 2. Fire-and-forget save to Redis + PostgreSQL in background
+      (async () => {
+        try {
+          await Promise.race([
+            saveDownloadSnapshotHelper({
+              orderId,
+              customerName,
+              format,
+              templateId,
+              snapshotData,
+              snapshotHtml,
+              isGzipped,
+              app,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Background snapshot timeout')), 5000)),
+          ]);
+        } catch (bgErr) {
+          app.log.warn('[Cashfree Snapshot Save Background] Warning:', bgErr.message);
+        }
+      })();
     } catch (err) {
       app.log.warn('[Cashfree Snapshot Save] Error:', err.message);
       return reply.status(500).send({ error: 'Failed to save snapshot', details: err.message });
@@ -745,6 +777,21 @@ export default async function cashfreeRoutes(app, options) {
             303
           );
         } else {
+          // If Cashfree says order is still ACTIVE (UPI bank settlement in progress),
+          // DO NOT mark it failed in the database! Redirect to confirming state for polling.
+          if (config.isConfigured) {
+            try {
+              const cfOrder = await getCashfreeOrderStatus(orderId).catch(() => null);
+              if (cfOrder && cfOrder.order_status === 'ACTIVE') {
+                app.log.info(`[Cashfree Callback] Order ${orderId} is still ACTIVE. Redirecting to confirming state for client polling.`);
+                return reply.redirect(
+                  `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=confirming`,
+                  303
+                );
+              }
+            } catch {}
+          }
+
           // Extract specific failure or cancellation reason from Cashfree payments
           let failureReason = 'Payment was cancelled or could not be completed';
           let finalStatus = 'failed';

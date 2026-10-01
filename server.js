@@ -9,7 +9,7 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
 import { loggerConfig } from './src/lib/logger.js';
 import { prisma } from './src/lib/prisma.js';
 import { redis } from './src/lib/redis.js';
-import { closeChromiumBrowser } from './src/services/pdfGenerator.js';
+import { closeChromiumBrowser, getChromiumBrowser } from './src/services/pdfGenerator.js';
 import appRoutes from './src/routes/index.js';
 
 dotenv.config();
@@ -36,7 +36,7 @@ const app = fastify({
   headersTimeout: 66000,       // Must be > keepAliveTimeout
 });
 
-// Support application/x-www-form-urlencoded (for Razorpay payment gateway callbacks)
+// Support application/x-www-form-urlencoded (for Cashfree payment gateway callbacks)
 app.addContentTypeParser(/^application\/x-www-form-urlencoded/i, { parseAs: 'string' }, (req, body, done) => {
   try {
     done(null, querystring.parse(body));
@@ -45,11 +45,12 @@ app.addContentTypeParser(/^application\/x-www-form-urlencoded/i, { parseAs: 'str
   }
 });
 
-// Register Brotli & Gzip Response Compression
+// Register Brotli & Gzip Response Compression (skip already-compressed binary streams: pdf, zip, jpg, png)
 await app.register(fastifyCompress, {
   global: true,
   encodings: ['br', 'gzip', 'deflate'],
   threshold: 1024,
+  customTypes: /^text\/|\/json$|\/xml$|\+xml$|\/javascript$/,
 });
 
 // Register Global Rate Limiting (120 req/min per IP; Puppeteer endpoints have custom 15/min limit)
@@ -156,6 +157,8 @@ const start = async () => {
     const port = process.env.PORT || 4000;
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`Fastify server is running on http://localhost:${port}`);
+    // Pre-warm Chromium in background so initial exports complete with 0ms cold-start
+    getChromiumBrowser().catch((err) => console.warn('[Server] Chromium pre-warm warning:', err.message));
   } catch (err) {
     app.log.error(err);
     process.exit(1);
@@ -187,3 +190,4 @@ const gracefulShutdown = async (signal) => {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+

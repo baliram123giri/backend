@@ -7,7 +7,7 @@ import {
   renderHtmlToComboZip,
 } from '../../services/pdfGenerator.js';
 import crypto from 'crypto';
-// Razorpay SDK removed — app now uses Cashfree exclusively.
+// Cashfree payment gateway is used exclusively.
 import { getCashfreeOrderStatus, getCashfreeConfig } from '../../services/cashfree.js';
 
 export default async function routes(app, options) {
@@ -165,7 +165,7 @@ export default async function routes(app, options) {
   });
 
   // 5.5 GET /api/razorpay/order-status/:orderId
-  // Fast status check + direct Razorpay auto-verification for mobile app-switch & polling
+  // Fast status check + direct Cashfree auto-verification for mobile app-switch & polling
   app.get('/api/razorpay/order-status/:orderId', async (request, reply) => {
     try {
       const { orderId } = request.params;
@@ -253,7 +253,7 @@ export default async function routes(app, options) {
     }
   });
 
-  // 6. Razorpay callback — now a 410 stub (duplicate of stubs above, kept for belt-and-suspenders)
+  // 6. Legacy callback stub
 
 
   // 7. GET /api/payment/download-paid-order/:orderId
@@ -300,8 +300,13 @@ export default async function routes(app, options) {
       }
 
       if (order.status !== 'paid') {
-        return reply.status(402).send({ error: 'Order payment has not been completed' });
+        return reply
+          .header('Cache-Control', 'no-store, no-cache, must-revalidate')
+          .header('Pragma', 'no-cache')
+          .status(402)
+          .send({ error: 'Order payment has not been completed' });
       }
+
 
       let snapshot = null;
 
@@ -328,6 +333,29 @@ export default async function routes(app, options) {
         });
       }
 
+      // 2.5 Grace period: if snapshot is missing on instant redirect, wait 800ms and re-check
+      // This eliminates the 404 race condition where background upload completes right after redirect
+      if (!snapshot) {
+        await new Promise((r) => setTimeout(r, 800));
+        if (redis && redis.status === 'ready') {
+          const cached = await redis.get(`snapshot:${order.razorpayOrderId}`).catch(() => null);
+          if (cached) {
+            try { snapshot = JSON.parse(cached); } catch {}
+          }
+        }
+        if (!snapshot) {
+          snapshot = await prisma.downloadSnapshot.findFirst({
+            where: {
+              OR: [
+                { orderId: order.razorpayOrderId },
+                { orderId: order.id },
+              ],
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+        }
+      }
+
       // 3. Fallback: match by customerName (only look FORWARD from order creation,
       //    within a 2-hour window to avoid cross-customer false matches)
       if (!snapshot && order.customerName) {
@@ -347,10 +375,15 @@ export default async function routes(app, options) {
       // snapshot.renderedHtml?.match() would throw TypeError if snapshot itself is null.
       if (!snapshot || !snapshot.renderedHtml) {
         app.log.warn(`[Download Paid Order] Snapshot not found or empty for order: ${order.razorpayOrderId || order.id}`);
-        return reply.status(404).send({
-          error: 'Document snapshot data is incomplete. Please contact support.',
-        });
+        // ROOT CAUSE FIX: no-store prevents mobile browsers from caching this 404 so that
+        // subsequent retries (after the fallback snapshot upload) actually reach the server.
+        return reply
+          .header('Cache-Control', 'no-store, no-cache, must-revalidate')
+          .header('Pragma', 'no-cache')
+          .status(404)
+          .send({ error: 'Document snapshot data is incomplete. Please contact support.' });
       }
+
 
       // Extract body content for validation; fall back to full HTML if no <body> tag present
       const bodyMatch = snapshot.renderedHtml.match(/<body[^>]*>([\/\s\S]*?)<\/body>/i);
@@ -365,14 +398,44 @@ export default async function routes(app, options) {
       const format = (order.format || snapshot.format || 'PDF').toUpperCase();
       const cleanName = (snapshot.name || order.customerName || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
 
+      // Check Redis cache for already generated binary document (5ms instant re-download)
+      const docCacheKey = `rendered_doc:${order.razorpayOrderId}:${format}`;
+      if (redis && redis.status === 'ready') {
+        const cachedBase64 = await redis.get(docCacheKey).catch(() => null);
+        if (cachedBase64) {
+          const cachedBuf = Buffer.from(cachedBase64, 'base64');
+          let contentType = 'application/pdf';
+          let ext = '.pdf';
+          let cat = 'biodata';
+          if (format === 'PNG') { contentType = 'image/png'; ext = '.png'; }
+          else if (format === 'JPG' || format === 'JPEG') { contentType = 'image/jpeg'; ext = '.jpg'; }
+          else if (format === 'COMBO') { contentType = 'application/zip'; ext = '.zip'; cat = 'biodata_combo'; }
+
+          const fileName = `${cleanName}${ext}`;
+          const contentDisposition = getContentDisposition(fileName, cat, ext);
+
+          return reply
+            .header('Content-Type', contentType)
+            .header('Content-Disposition', contentDisposition)
+            .header('Content-Length', cachedBuf.length)
+            .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            .send(cachedBuf);
+        }
+      }
+
       // Mark order as successfully downloaded ONLY when the network stream completes cleanly
-      const markSuccessOnFinish = () => {
+      const markSuccessOnFinish = (bufferToCache) => {
         if (reply.raw) {
           reply.raw.on('finish', () => {
             prisma.order.update({
               where: { id: order.id },
               data: { downloadStatus: 'success' },
             }).catch((err) => app.log.warn('Failed to update downloadStatus on finish:', err.message));
+
+            // Cache generated buffer in Redis for 1 hour to make any re-download / retry instant (5ms)
+            if (bufferToCache && redis && redis.status === 'ready') {
+              redis.set(docCacheKey, bufferToCache.toString('base64'), 'EX', 3600).catch(() => {});
+            }
           });
         }
       };
@@ -382,7 +445,7 @@ export default async function routes(app, options) {
         const fileName = `${cleanName}.pdf`;
         const pdfBuffer = await renderHtmlToVectorPdf(snapshot.renderedHtml, { fileName });
         const contentDisposition = getContentDisposition(fileName, 'biodata', '.pdf');
-        markSuccessOnFinish();
+        markSuccessOnFinish(pdfBuffer);
 
         return reply
           .header('Content-Type', 'application/pdf')
@@ -402,7 +465,7 @@ export default async function routes(app, options) {
         });
         const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
         const contentDisposition = getContentDisposition(fileName, 'biodata', `.${ext}`);
-        markSuccessOnFinish();
+        markSuccessOnFinish(result.buffer);
 
         return reply
           .header('Content-Type', mimeType)
@@ -417,7 +480,7 @@ export default async function routes(app, options) {
         const fileName = `${cleanName}_Combo.zip`;
         const zipBuffer = await renderHtmlToComboZip(snapshot.renderedHtml, { cleanName });
         const contentDisposition = getContentDisposition(fileName, 'biodata_combo', '.zip');
-        markSuccessOnFinish();
+        markSuccessOnFinish(zipBuffer);
 
         return reply
           .header('Content-Type', 'application/zip')

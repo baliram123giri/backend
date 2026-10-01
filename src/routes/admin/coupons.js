@@ -79,8 +79,7 @@ export default async function adminCouponsRoutes(app, options) {
 
       // Invalidate cache
       if (redis && redis.status === 'ready') {
-        await redis.del(CACHE_KEY);
-        await redis.del('active-coupons');
+        await redis.del(CACHE_KEY, 'active-coupons', `coupon:${cleanCode}`).catch(() => {});
       }
 
       return reply.send({ success: true, coupon });
@@ -115,8 +114,7 @@ export default async function adminCouponsRoutes(app, options) {
 
         // Invalidate cache
         if (redis && redis.status === 'ready') {
-          await redis.del(CACHE_KEY);
-          await redis.del('active-coupons');
+          await redis.del(CACHE_KEY, 'active-coupons', `coupon:${updated.code}`).catch(() => {});
         }
 
         return reply.send({ success: true, coupon: updated });
@@ -145,8 +143,7 @@ export default async function adminCouponsRoutes(app, options) {
 
       // Invalidate cache
       if (redis && redis.status === 'ready') {
-        await redis.del(CACHE_KEY);
-        await redis.del('active-coupons');
+        await redis.del(CACHE_KEY, 'active-coupons').catch(() => {});
       }
 
       return reply.send({ success: true, message: `${targetIds.length} coupons deleted successfully` });

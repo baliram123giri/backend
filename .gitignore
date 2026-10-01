@@ -61,5 +61,9 @@ real_combo_packs/
 scratch*
 sync_*.js
 check_*.js
+test-*.js
+test_*.js
+test-*.pdf
 *.tmp
+
 

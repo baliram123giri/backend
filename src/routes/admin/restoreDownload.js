@@ -40,7 +40,7 @@ export default async function restoreDownloadRoutes(app, options) {
         });
       }
 
-      // 3. If id is an Order primary key (UUID), resolve its razorpayOrderId
+      // 3. If id is an Order primary key (UUID), resolve its orderId
       if (!snapshot) {
         const order = await prisma.order.findUnique({
           where: { id },
@@ -141,18 +141,7 @@ export default async function restoreDownloadRoutes(app, options) {
         });
       }
 
-      if (snapshot.orderId) {
-        prisma.order.updateMany({
-          where: {
-            OR: [
-              { razorpayOrderId: snapshot.orderId },
-              { id: snapshot.orderId },
-            ],
-            status: 'paid',
-          },
-          data: { downloadStatus: 'success' },
-        }).catch(() => {});
-      }
+      // Note: We preserve the original order.downloadStatus so admins can track if the original user download failed.
 
       const cleanName = (snapshot.name || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
       const format = (snapshot.format || 'PDF').toUpperCase();

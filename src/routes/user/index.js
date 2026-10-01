@@ -164,111 +164,99 @@ app.post('/api/feedback', {
         null;
       const userAgent = request.headers['user-agent'] || null;
 
-      // Always create persistent download log in database (both Free and Paid)
-      const log = await prisma.downloadLog.create({
-        data: {
-          name: resolvedName,
-          location: resolvedLocation,
-          format: resolvedFormat,
-          templateId: templateId || null,
-          ipAddress,
-          userAgent,
-          orderId: isFree ? null : (resolvedOrderId || null),
-          errorMsg: errorMsg || null,
-        },
-      });
-
-      // Save 24-hour snapshot if snapshotData or renderedHtml provided
-      if (snapshotData || renderedHtml) {
+      // Execute logging and cache updates asynchronously / bounded with safety timeouts
+      // so analytics/audit logging never blocks the user experience
+      (async () => {
         try {
-          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-          const snap = await prisma.downloadSnapshot.create({
+          const logPromise = prisma.downloadLog.create({
             data: {
               name: resolvedName,
+              location: resolvedLocation,
               format: resolvedFormat,
               templateId: templateId || null,
+              ipAddress,
+              userAgent,
               orderId: isFree ? null : (resolvedOrderId || null),
-              downloadLogId: log.id,
-              snapshotData: snapshotData || {},
-              renderedHtml: renderedHtml || null,
-              expiresAt,
+              errorMsg: errorMsg || null,
             },
           });
-          if (redis && redis.status === 'ready') {
-            await redis.set(
-              `snapshot:${snap.id}`,
-              JSON.stringify({
-                id: snap.id,
-                name: snap.name,
-                format: resolvedFormat,
-                templateId,
-                orderId: isFree ? null : (resolvedOrderId || null),
-                snapshotData,
-                renderedHtml,
-                expiresAt: expiresAt.toISOString(),
-              }),
-              'EX',
-              86400
-            ).catch(() => {});
-          }
-        } catch (snapErr) {
-          console.warn('Failed to save snapshot in download-log:', snapErr.message);
-        }
-      } else {
-        // Fallback: If snapshot wasn't passed directly, link any unlinked snapshot recently created
-        try {
-          const recentSnap = await prisma.downloadSnapshot.findFirst({
-            where: {
-              name: resolvedName,
-              downloadLogId: null,
-              createdAt: {
-                gte: new Date(Date.now() - 5 * 60 * 1000),
-              },
-            },
-            orderBy: { createdAt: 'desc' },
-          });
-          if (recentSnap) {
-            await prisma.downloadSnapshot.update({
-              where: { id: recentSnap.id },
-              data: { downloadLogId: log.id },
-            }).catch(() => {});
-          }
-        } catch (linkErr) {
-          console.warn('Failed to auto-link snapshot in download-log:', linkErr.message);
-        }
-      }
 
-      // Invalidate dashboard stats & transaction caches
-      if (redis && redis.status === 'ready') {
-        try {
-          await redis.del('admin:dashboard-stats');
-          const txKeys = await redis.keys('transactions:*');
-          if (txKeys.length > 0) {
-            await redis.del(txKeys);
-          }
-          if (isFree && resolvedName) {
-            const freeKeys = await redis.keys(`ratelimit:free_dl:${resolvedName.toLowerCase()}*`);
-            if (freeKeys.length > 0) {
-              await redis.del(freeKeys);
+          const log = await Promise.race([
+            logPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Log DB timeout (2500ms)')), 2500)),
+          ]).catch((err) => {
+            console.warn('[Download Log] DB insert warning:', err.message);
+            return null;
+          });
+
+          // Save 24-hour snapshot if snapshotData or renderedHtml provided
+          if (log && (snapshotData || renderedHtml)) {
+            try {
+              const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+              const snap = await Promise.race([
+                prisma.downloadSnapshot.create({
+                  data: {
+                    name: resolvedName,
+                    format: resolvedFormat,
+                    templateId: templateId || null,
+                    orderId: isFree ? null : (resolvedOrderId || null),
+                    downloadLogId: log.id,
+                    snapshotData: snapshotData || {},
+                    renderedHtml: renderedHtml || null,
+                    expiresAt,
+                  },
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Snapshot DB timeout')), 2000)),
+              ]);
+
+              if (redis && redis.status === 'ready' && snap?.id) {
+                await redis.set(
+                  `snapshot:${snap.id}`,
+                  JSON.stringify({
+                    id: snap.id,
+                    name: snap.name,
+                    format: resolvedFormat,
+                    templateId,
+                    orderId: isFree ? null : (resolvedOrderId || null),
+                    snapshotData,
+                    renderedHtml,
+                    expiresAt: expiresAt.toISOString(),
+                  }),
+                  'EX',
+                  86400
+                ).catch(() => {});
+              }
+            } catch (snapErr) {
+              console.warn('[Download Log] Failed to save snapshot:', snapErr.message);
             }
           }
-        } catch (cacheErr) {
-          console.warn('Redis cache invalidation error on download log:', cacheErr.message);
-        }
-      }
 
-      if (resolvedOrderId && resolvedOrderId !== 'sandbox' && resolvedOrderId !== 'dev_bypass') {
-        try {
-          await prisma.order.updateMany({
-            where: { razorpayOrderId: resolvedOrderId },
-            data: { downloadStatus: status === 'failed' ? 'failed' : 'success' },
-          });
-        } catch (dbErr) {
-          console.warn('Failed to update downloadStatus of order in download-log API:', dbErr.message);
-        }
-      }
+          // Invalidate caches non-blockingly
+          if (redis && redis.status === 'ready') {
+            await redis.del('admin:dashboard-stats').catch(() => {});
+          }
 
-      return { success: true, log };
+          if (resolvedOrderId && resolvedOrderId !== 'sandbox' && resolvedOrderId !== 'dev_bypass') {
+            await Promise.race([
+              prisma.order.updateMany({
+                where: {
+                  OR: [
+                    { id: resolvedOrderId },
+                    { razorpayOrderId: resolvedOrderId },
+                    { cashfreeOrderId: resolvedOrderId },
+                  ],
+                },
+                data: { downloadStatus: status === 'failed' ? 'failed' : 'success' },
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Order update timeout')), 2000)),
+            ]).catch((err) => console.warn('[Download Log] Order status update warning:', err.message));
+          }
+        } catch (bgErr) {
+          console.warn('[Download Log] Background task warning:', bgErr.message);
+        }
+      })();
+
+      return reply.send({ success: true, message: 'Download logged successfully' });
     } catch (error) {
       app.log.error('Download log error:', error);
       reply.status(500).send({ error: 'Failed to record download', details: error.message });

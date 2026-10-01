@@ -234,6 +234,7 @@ export default async function dashboardRoutes(app, options) {
             downloadStatus: order.downloadStatus || "pending",
             templateId: order.templateId,
             templateName: template ? template.name : "Premium Theme",
+            cashfreeOrderId: order.razorpayOrderId,
             razorpayOrderId: order.razorpayOrderId,
             createdAt: order.createdAt,
           };
@@ -263,6 +264,7 @@ export default async function dashboardRoutes(app, options) {
               downloadStatus: log.errorMsg ? "failed" : "success",
               templateId: log.templateId,
               templateName: template ? template.name : "Standard Theme",
+              cashfreeOrderId: null,
               razorpayOrderId: null,
               createdAt: log.createdAt,
             };
@@ -297,6 +299,7 @@ export default async function dashboardRoutes(app, options) {
             errorMsg: failureReason,
             templateId: order.templateId,
             templateName: template ? template.name : "Premium Theme",
+            cashfreeOrderId: order.razorpayOrderId,
             razorpayOrderId: order.razorpayOrderId,
             createdAt: order.createdAt,
           };
@@ -326,6 +329,7 @@ export default async function dashboardRoutes(app, options) {
               errorMsg: log.errorMsg || "Free download package generation failed",
               templateId: log.templateId,
               templateName: template ? template.name : "Standard Theme",
+              cashfreeOrderId: null,
               razorpayOrderId: null,
               createdAt: log.createdAt,
             };

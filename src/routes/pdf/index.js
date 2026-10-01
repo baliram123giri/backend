@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import { getContentDisposition } from '../../lib/headerUtils.js';
 import * as Sentry from '@sentry/node';
+import zlib from 'zlib';
 
 const renderRateLimitConfig = {
   config: {
@@ -17,8 +18,9 @@ export default async function pdfRoutes(app, options) {
   app.post('/api/generate-pdf', renderRateLimitConfig, async (request, reply) => {
     const startTime = Date.now();
     try {
-      const {
+      let {
         html,
+        isGzipped = false,
         totalPages = 1,
         fileName = 'biodata.pdf',
         snapshotData = null,
@@ -27,57 +29,77 @@ export default async function pdfRoutes(app, options) {
         name = 'Biodata',
       } = request.body || {};
 
+      if (isGzipped && html) {
+        try {
+          const buf = Buffer.from(html, 'base64');
+          html = zlib.gunzipSync(buf).toString('utf-8');
+        } catch (gzipErr) {
+          console.warn('[PDF Route] Gunzip decompression failed, using raw:', gzipErr.message);
+        }
+      }
+
       if (!html || typeof html !== 'string') {
         return reply.status(400).send({
           error: 'Missing or invalid "html" field in request body.',
         });
       }
 
-      // ── 1. Save 24-Hour Snapshot (PostgreSQL + Redis) ──────────────────────
       let snapshotId = null;
-      try {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-        const snapshot = await prisma.downloadSnapshot.create({
-          data: {
-            name: typeof name === 'string' ? name.trim() : 'Biodata',
-            format: 'PDF',
-            templateId: templateId || null,
-            orderId: orderId || null,
-            snapshotData: snapshotData || {},
-            renderedHtml: html,
-            expiresAt,
-          },
-        });
-        snapshotId = snapshot.id;
 
-        // Fast Redis cache with 24-hour TTL (86,400 seconds)
-        if (redis && redis.status === 'ready') {
-          await redis.set(
-            `snapshot:${snapshot.id}`,
-            JSON.stringify({
-              id: snapshot.id,
-              name: snapshot.name,
+      // ── 1. Fire-and-forget Snapshot Save (PostgreSQL + Redis in background) ──
+      // Completely non-blocking: DB operations NEVER delay sending the PDF to the user
+      (async () => {
+        try {
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const dbPromise = prisma.downloadSnapshot.create({
+            data: {
+              name: typeof name === 'string' ? name.trim() : 'Biodata',
               format: 'PDF',
-              templateId,
-              orderId,
-              snapshotData,
+              templateId: templateId || null,
+              orderId: orderId || null,
+              snapshotData: snapshotData || {},
               renderedHtml: html,
-              expiresAt: expiresAt.toISOString(),
-            }),
-            'EX',
-            86400
-          ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
-        }
-      } catch (dbErr) {
-        // Non-blocking: even if snapshot save fails, continue generating PDF for user
-        console.warn('[PDF Route] Snapshot save warning:', dbErr.message);
-      }
+              expiresAt,
+            },
+          });
+          const snapshot = await Promise.race([
+            dbPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Snapshot DB Timeout (2500ms)')), 2500)),
+          ]);
 
-      // ── 2. Render True Vector PDF via Pre-Warmed Chromium ──────────────────
-      const pdfBuffer = await renderHtmlToVectorPdf(html, {
+          if (snapshot?.id) {
+            snapshotId = snapshot.id;
+          }
+
+          if (redis && redis.status === 'ready' && snapshot?.id) {
+            await redis.set(
+              `snapshot:${snapshot.id}`,
+              JSON.stringify({
+                id: snapshot.id,
+                name: snapshot.name,
+                format: 'PDF',
+                templateId,
+                orderId,
+                snapshotData,
+                renderedHtml: html,
+                expiresAt: expiresAt.toISOString(),
+              }),
+              'EX',
+              86400
+            ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
+          }
+        } catch (dbErr) {
+          console.warn('[PDF Route] Snapshot save warning (non-blocking):', dbErr.message);
+        }
+      })();
+
+      // ── 2. Render True Vector PDF via Pre-Warmed Chromium (Instant 0ms start!) ──
+      const rawPdf = await renderHtmlToVectorPdf(html, {
         totalPages: Number(totalPages) || 1,
         fileName,
       });
+
+      const pdfBuffer = Buffer.isBuffer(rawPdf) ? rawPdf : Buffer.from(rawPdf);
 
       const totalDuration = Date.now() - startTime;
       console.log(`[PDF Route] Completed in ${totalDuration}ms for "${fileName}"`);
@@ -96,10 +118,14 @@ export default async function pdfRoutes(app, options) {
       console.error(`[PDF Route] Error after ${errorDuration}ms:`, error);
       Sentry.captureException(error);
 
-      reply.status(500).send({
-        error: error?.message || 'Failed to generate vector PDF. Please try again.',
-        durationMs: errorDuration,
-      });
+      // Reset Content-Type header to JSON on error
+      reply
+        .header('Content-Type', 'application/json')
+        .status(500)
+        .send({
+          error: error?.message || 'Failed to generate vector PDF. Please try again.',
+          durationMs: errorDuration,
+        });
     }
   });
 
@@ -107,8 +133,9 @@ export default async function pdfRoutes(app, options) {
   app.post('/api/generate-image', renderRateLimitConfig, async (request, reply) => {
     const startTime = Date.now();
     try {
-      const {
+      let {
         html,
+        isGzipped = false,
         totalPages = 1,
         pageIndex = 0,
         fileName = 'biodata.png',
@@ -120,6 +147,15 @@ export default async function pdfRoutes(app, options) {
         name = 'Biodata',
       } = request.body || {};
 
+      if (isGzipped && html) {
+        try {
+          const buf = Buffer.from(html, 'base64');
+          html = zlib.gunzipSync(buf).toString('utf-8');
+        } catch (gzipErr) {
+          console.warn('[Image Route] Gunzip decompression failed, using raw:', gzipErr.message);
+        }
+      }
+
       if (!html || typeof html !== 'string') {
         return reply.status(400).send({
           error: 'Missing or invalid "html" field in request body.',
@@ -129,45 +165,51 @@ export default async function pdfRoutes(app, options) {
       const cleanFormat = format.toLowerCase() === 'jpg' || format.toLowerCase() === 'jpeg' ? 'JPG' : 'PNG';
       const cleanName = (name || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
 
-      // 1. Save 24-Hour Snapshot (PostgreSQL + Redis)
+      // 1. Fire-and-forget Snapshot Save (PostgreSQL + Redis in background)
       let snapshotId = null;
-      try {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        const snapshot = await prisma.downloadSnapshot.create({
-          data: {
-            name: typeof name === 'string' ? name.trim() : 'Biodata',
-            format: cleanFormat,
-            templateId: templateId || null,
-            orderId: orderId || null,
-            snapshotData: snapshotData || {},
-            renderedHtml: html,
-            expiresAt,
-          },
-        });
-        snapshotId = snapshot.id;
-
-        if (redis && redis.status === 'ready') {
-          await redis.set(
-            `snapshot:${snapshot.id}`,
-            JSON.stringify({
-              id: snapshot.id,
-              name: snapshot.name,
-              format: cleanFormat,
-              templateId,
-              orderId,
-              snapshotData,
-              renderedHtml: html,
-              expiresAt: expiresAt.toISOString(),
+      (async () => {
+        try {
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const snap = await Promise.race([
+            prisma.downloadSnapshot.create({
+              data: {
+                name: typeof name === 'string' ? name.trim() : 'Biodata',
+                format: cleanFormat,
+                templateId: templateId || null,
+                orderId: orderId || null,
+                snapshotData: snapshotData || {},
+                renderedHtml: html,
+                expiresAt,
+              },
             }),
-            'EX',
-            86400
-          ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
-        }
-      } catch (dbErr) {
-        console.warn('[Image Route] Snapshot save warning:', dbErr.message);
-      }
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Snapshot timeout')), 2500)),
+          ]);
 
-      // 2. Render Image via Pre-Warmed Chromium
+          if (snap?.id) snapshotId = snap.id;
+
+          if (redis && redis.status === 'ready' && snap?.id) {
+            await redis.set(
+              `snapshot:${snap.id}`,
+              JSON.stringify({
+                id: snap.id,
+                name: snap.name,
+                format: cleanFormat,
+                templateId,
+                orderId,
+                snapshotData,
+                renderedHtml,
+                expiresAt: expiresAt.toISOString(),
+              }),
+              'EX',
+              86400
+            ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
+          }
+        } catch (dbErr) {
+          console.warn('[Image Route] Snapshot save warning (non-blocking):', dbErr.message);
+        }
+      })();
+
+      // 2. Render Image via Pre-Warmed Chromium (Starts immediately at 0ms!)
       const result = await renderHtmlToImage(html, cleanFormat.toLowerCase(), {
         cleanName,
         pageIndex: Number(pageIndex) || 0,
@@ -201,10 +243,13 @@ export default async function pdfRoutes(app, options) {
       console.error(`[Image Route] Error after ${errorDuration}ms:`, error);
       Sentry.captureException(error);
 
-      reply.status(500).send({
-        error: error?.message || 'Failed to generate image. Please try again.',
-        durationMs: errorDuration,
-      });
+      reply
+        .header('Content-Type', 'application/json')
+        .status(500)
+        .send({
+          error: error?.message || 'Failed to generate image. Please try again.',
+          durationMs: errorDuration,
+        });
     }
   });
 
@@ -212,13 +257,23 @@ export default async function pdfRoutes(app, options) {
   app.post('/api/generate-combo', renderRateLimitConfig, async (request, reply) => {
     const startTime = Date.now();
     try {
-      const {
+      let {
         html,
+        isGzipped = false,
         snapshotData = null,
         orderId = null,
         templateId = null,
         name = 'Biodata',
       } = request.body || {};
+
+      if (isGzipped && html) {
+        try {
+          const buf = Buffer.from(html, 'base64');
+          html = zlib.gunzipSync(buf).toString('utf-8');
+        } catch (gzipErr) {
+          console.warn('[Combo Route] Gunzip decompression failed, using raw:', gzipErr.message);
+        }
+      }
 
       if (!html || typeof html !== 'string') {
         return reply.status(400).send({
@@ -228,51 +283,58 @@ export default async function pdfRoutes(app, options) {
 
       const cleanName = (name || 'Biodata').replace(/[^a-zA-Z0-9_\u0900-\u0D7F]/g, '_');
 
-      // 1. Save 24-Hour Snapshot
+      // 1. Fire-and-forget Snapshot Save (PostgreSQL + Redis in background)
       let snapshotId = null;
-      try {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        const snapshot = await prisma.downloadSnapshot.create({
-          data: {
-            name: typeof name === 'string' ? name.trim() : 'Biodata',
-            format: 'COMBO',
-            templateId: templateId || null,
-            orderId: orderId || null,
-            snapshotData: snapshotData || {},
-            renderedHtml: html,
-            expiresAt,
-          },
-        });
-        snapshotId = snapshot.id;
-
-        if (redis && redis.status === 'ready') {
-          await redis.set(
-            `snapshot:${snapshot.id}`,
-            JSON.stringify({
-              id: snapshot.id,
-              name: snapshot.name,
-              format: 'COMBO',
-              templateId,
-              orderId,
-              snapshotData,
-              renderedHtml: html,
-              expiresAt: expiresAt.toISOString(),
+      (async () => {
+        try {
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const snap = await Promise.race([
+            prisma.downloadSnapshot.create({
+              data: {
+                name: typeof name === 'string' ? name.trim() : 'Biodata',
+                format: 'COMBO',
+                templateId: templateId || null,
+                orderId: orderId || null,
+                snapshotData: snapshotData || {},
+                renderedHtml: html,
+                expiresAt,
+              },
             }),
-            'EX',
-            86400
-          ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
-        }
-      } catch (dbErr) {
-        console.warn('[Combo Route] Snapshot save warning:', dbErr.message);
-      }
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Snapshot timeout')), 2500)),
+          ]);
 
-      // 2. Render Combo ZIP
-      const zipBuffer = await renderHtmlToComboZip(html, { cleanName });
+          if (snap?.id) snapshotId = snap.id;
+
+          if (redis && redis.status === 'ready' && snap?.id) {
+            await redis.set(
+              `snapshot:${snap.id}`,
+              JSON.stringify({
+                id: snap.id,
+                name: snap.name,
+                format: 'COMBO',
+                templateId,
+                orderId,
+                snapshotData,
+                renderedHtml: html,
+                expiresAt: expiresAt.toISOString(),
+              }),
+              'EX',
+              86400
+            ).catch((e) => console.warn('Redis snapshot cache error:', e.message));
+          }
+        } catch (dbErr) {
+          console.warn('[Combo Route] Snapshot save warning (non-blocking):', dbErr.message);
+        }
+      })();
+
+      // 2. Render Combo ZIP (Starts immediately at 0ms!)
+      const rawZip = await renderHtmlToComboZip(html, { cleanName });
+      const zipBuffer = Buffer.isBuffer(rawZip) ? rawZip : Buffer.from(rawZip);
 
       const totalDuration = Date.now() - startTime;
       console.log(`[Combo Route] Completed in ${totalDuration}ms for "${cleanName}"`);
 
-      // 3. Stream Binary ZIP
+      // 3. Stream Binary ZIP Directly
       const outFileName = `${cleanName}_Combo.zip`;
 
       reply
@@ -288,10 +350,13 @@ export default async function pdfRoutes(app, options) {
       console.error(`[Combo Route] Error after ${errorDuration}ms:`, error);
       Sentry.captureException(error);
 
-      reply.status(500).send({
-        error: error?.message || 'Failed to generate combo pack. Please try again.',
-        durationMs: errorDuration,
-      });
+      reply
+        .header('Content-Type', 'application/json')
+        .status(500)
+        .send({
+          error: error?.message || 'Failed to generate combo pack. Please try again.',
+          durationMs: errorDuration,
+        });
     }
   });
 }
