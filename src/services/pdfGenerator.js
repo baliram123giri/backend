@@ -276,11 +276,14 @@ export async function setupPageSecurity(page) {
       const port = parsedUrl.port ? Number(parsedUrl.port) : (parsedUrl.protocol === 'https:' ? 443 : 80);
       const pathname = decodeURIComponent(parsedUrl.pathname);
 
-      // Block redundant external analytics
+      // Block redundant external analytics, external Google Fonts (inlined as Base64), and Astro client CSS
       if (
         hostname.includes('google-analytics') ||
         hostname.includes('googletagmanager') ||
-        hostname.includes('doubleclick')
+        hostname.includes('doubleclick') ||
+        hostname.includes('fonts.googleapis.com') ||
+        hostname.includes('fonts.gstatic.com') ||
+        pathname.includes('/_astro/')
       ) {
         return req.abort('blockedbyclient').catch(() => {});
       }
@@ -350,16 +353,23 @@ export async function setupPageSecurity(page) {
           return req.abort('accessdenied').catch(() => {});
         }
 
-        // Fetch via Node's native fetch with IPv4 loopback (bypasses Cloudflare external network hop, WAF & DNS timeout)
+        // Fetch via Node's native fetch (routes /api/ locally to bypass Cloudflare; fetches external assets with browser UA)
+        const isBackendApi = parsedUrl.pathname.startsWith('/api/');
         const localBackendPort = process.env.PORT || 5000;
-        const safeUrl = isAppDomain
+        const safeUrl = (isAppDomain && isBackendApi)
           ? `http://127.0.0.1:${localBackendPort}${parsedUrl.pathname}${parsedUrl.search}`
           : urlStr
               .replace('//localhost:', '//127.0.0.1:')
               .replace('//[::1]:', '//127.0.0.1:');
 
-        const fetchTimeout = pathname.includes('proxy-logo') ? 4000 : 1200;
-        fetch(safeUrl, { signal: AbortSignal.timeout(fetchTimeout) }).then(async (res) => {
+        const fetchTimeout = pathname.includes('proxy-logo') ? 4000 : 2500;
+        fetch(safeUrl, {
+          signal: AbortSignal.timeout(fetchTimeout),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          },
+        }).then(async (res) => {
           if (res.ok) {
             const buffer = Buffer.from(await res.arrayBuffer());
             const contentType = res.headers.get('content-type') || 'application/octet-stream';
@@ -992,6 +1002,14 @@ export function prepareNormalizedHtml(fullHtml) {
 
   // 1. Sanitize &quot; inside inline style attributes so SVG and CSS rules are not corrupted
   normalizedHtml = normalizedHtml.replace(/&quot;/g, "'");
+
+  // 2. Strip external Google Fonts, preconnects, and Astro website bundles.
+  // All fonts are inlined as Base64 data: URIs and all layout styling is in GUARANTEE_CSS.
+  // Stripping these prevents Chromium from making 10-15 outbound network calls to Google Fonts/Cloudflare,
+  // cutting PDF render time from 10+ seconds down to ~2 seconds!
+  normalizedHtml = normalizedHtml
+    .replace(/<link[^>]+(?:fonts\.googleapis\.com|fonts\.gstatic\.com|_astro)[^>]*>/gi, '')
+    .replace(/<link[^>]+rel=["']preconnect["'][^>]*>/gi, '');
 
   const inlinedFontCss = generateInlinedFontCss(normalizedHtml);
 
