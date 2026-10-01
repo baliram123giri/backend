@@ -135,28 +135,6 @@ app.post('/api/feedback', {
         resolvedLocation = `DOB: ${trimmedDob}`;
       }
 
-      // Resolve orderId only if not explicitly a free download
-      let resolvedOrderId = orderId || null;
-      if (!isFree && !resolvedOrderId && resolvedName && templateId) {
-        try {
-          const matchingOrder = await prisma.order.findFirst({
-            where: {
-              customerName: { equals: resolvedName, mode: 'insensitive' },
-              templateId: templateId,
-              status: 'paid',
-            },
-            orderBy: {
-              createdAt: 'desc',
-            },
-          });
-          if (matchingOrder) {
-            resolvedOrderId = matchingOrder.razorpayOrderId || matchingOrder.id;
-          }
-        } catch (findErr) {
-          console.warn('Failed to resolve missing order ID in download log:', findErr.message);
-        }
-      }
-
       const ipAddress =
         request.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
         request.headers['x-real-ip'] ||
@@ -164,10 +142,33 @@ app.post('/api/feedback', {
         null;
       const userAgent = request.headers['user-agent'] || null;
 
-      // Execute logging and cache updates asynchronously / bounded with safety timeouts
-      // so analytics/audit logging never blocks the user experience
+      // Send response immediately to client (0ms latency) - logging & snapshot run in background
+      reply.send({ success: true, message: 'Download logged successfully' });
+
+      // Execute logging and cache updates asynchronously in background
       (async () => {
         try {
+          let resolvedOrderId = orderId || null;
+          if (!isFree && !resolvedOrderId && resolvedName && templateId) {
+            try {
+              const matchingOrder = await prisma.order.findFirst({
+                where: {
+                  customerName: { equals: resolvedName, mode: 'insensitive' },
+                  templateId: templateId,
+                  status: 'paid',
+                },
+                orderBy: {
+                  createdAt: 'desc',
+                },
+              });
+              if (matchingOrder) {
+                resolvedOrderId = matchingOrder.razorpayOrderId || matchingOrder.id;
+              }
+            } catch (findErr) {
+              console.warn('Failed to resolve missing order ID in download log:', findErr.message);
+            }
+          }
+
           const logPromise = prisma.downloadLog.create({
             data: {
               name: resolvedName,
