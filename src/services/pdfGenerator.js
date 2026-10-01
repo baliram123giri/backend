@@ -545,17 +545,17 @@ function getFontDataUrl(filename, mimeType = 'font/truetype') {
 const FONT_MAP = [
   {
     family: 'Great Vibes',
-    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '400' }],
     aliases: ['great vibes', 'greatvibes'],
   },
   {
     family: 'Alex Brush',
-    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '400' }],
     aliases: ['alex brush', 'alexbrush'],
   },
   {
     family: 'Sacramento',
-    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '400' }],
     aliases: ['sacramento'],
   },
   {
@@ -716,7 +716,7 @@ const FONT_MAP = [
   },
   {
     family: 'Tillana',
-    files: [{ file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    files: [{ file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '400' }],
     aliases: ['tillana'],
   },
 ];
@@ -748,7 +748,10 @@ export function generateInlinedFontCss(html = '') {
 
 // ─── HTML Normalization & CSS Guarantees ───────────────────────────────────────
 const GUARANTEE_CSS = `
-  *, ::before, ::after { box-sizing: border-box; }
+  *, ::before, ::after {
+    box-sizing: border-box;
+    font-synthesis: weight style !important;
+  }
   html, body {
     margin: 0 !important;
     padding: 0 !important;
@@ -758,6 +761,14 @@ const GUARANTEE_CSS = `
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     font-synthesis: weight style !important;
+  }
+  /* Script & Calligraphy font boldness parity for vector PDF */
+  [style*="Great Vibes" i], [style*="Alex Brush" i], [style*="Sacramento" i],
+  [style*="Allura" i], [style*="Parisienne" i], [style*="Cookie" i],
+  [style*="Dancing Script" i], [style*="Satisfy" i], [style*="Tangerine" i] {
+    font-synthesis: weight style !important;
+    -webkit-text-stroke-width: 0.45px !important;
+    paint-order: stroke fill !important;
   }
   @page {
     size: 210mm 297mm;
