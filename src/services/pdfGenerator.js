@@ -10,6 +10,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const candidatePublicDirs = [
+  process.env.STATIC_DIR,
+  process.env.STATIC_ASSETS_DIR,
+  '/var/www/biodata99/client/dist',
+  '/var/www/biodata99/client/public',
+  '/var/www/biodata99/dist',
   path.resolve(__dirname, '../../assets'),
   path.resolve(process.cwd(), 'assets'),
   path.resolve(__dirname, '../../../client/public'),
@@ -18,7 +23,7 @@ const candidatePublicDirs = [
   path.resolve(process.cwd(), '../client/public'),
   path.resolve(process.cwd(), '../client/dist/client'),
   path.resolve(process.cwd(), 'public'),
-].filter((dir) => {
+].filter(Boolean).filter((dir) => {
   try {
     return fs.existsSync(dir);
   } catch {
@@ -316,20 +321,26 @@ export async function setupPageSecurity(page) {
         }
       }
 
-      // 1b. Allow localhost / loopback requests to the application's dev/preview and API servers
+      // 1b. Allow localhost / loopback requests and internal routing for app domain (bypasses Cloudflare hairpin stalls)
+      const isAppDomain =
+        hostname === 'biodata99.com' ||
+        hostname.endsWith('.biodata99.com') ||
+        (process.env.APP_DOMAIN && (hostname === process.env.APP_DOMAIN || hostname.endsWith(`.${process.env.APP_DOMAIN}`)));
+
       const isLoopback =
+        isAppDomain ||
         hostname === 'localhost' ||
         hostname === '127.0.0.1' ||
         hostname === '::1' ||
         hostname.endsWith('.localhost');
 
       if (isLoopback) {
-        // Only allow web ports: Astro preview (4321), Fastify backend (4000), Vite (5173), Next (3000), standard HTTP(S)
-        const allowedAppPorts = [4321, 4000, 3000, 5173, 80, 443, 8080, 8443];
+        // Only allow web ports: Astro preview (4321), Fastify backend (4000/5000), Vite (5173), Next (3000), standard HTTP(S)
+        const allowedAppPorts = [4321, 4000, 5000, 3000, 5173, 80, 443, 8080, 8443];
         if (process.env.PORT) {
           allowedAppPorts.push(Number(process.env.PORT));
         }
-        if (!allowedAppPorts.includes(port)) {
+        if (!isAppDomain && !allowedAppPorts.includes(port)) {
           return req.abort('accessdenied').catch(() => {});
         }
 
@@ -339,10 +350,13 @@ export async function setupPageSecurity(page) {
           return req.abort('accessdenied').catch(() => {});
         }
 
-        // Fetch via Node's native fetch with IPv4 loopback (bypasses Windows ::1 DNS timeout and CORS)
-        const safeUrl = urlStr
-          .replace('//localhost:', '//127.0.0.1:')
-          .replace('//[::1]:', '//127.0.0.1:');
+        // Fetch via Node's native fetch with IPv4 loopback (bypasses Cloudflare external network hop, WAF & DNS timeout)
+        const localBackendPort = process.env.PORT || 5000;
+        const safeUrl = isAppDomain
+          ? `http://127.0.0.1:${localBackendPort}${parsedUrl.pathname}${parsedUrl.search}`
+          : urlStr
+              .replace('//localhost:', '//127.0.0.1:')
+              .replace('//[::1]:', '//127.0.0.1:');
 
         const fetchTimeout = pathname.includes('proxy-logo') ? 4000 : 1200;
         fetch(safeUrl, { signal: AbortSignal.timeout(fetchTimeout) }).then(async (res) => {
@@ -509,12 +523,15 @@ async function waitForAssets(page) {
 
 // ─── Embedded Base64 Font Engine for 100% Offline Vector PDF & Image Rendering ───
 const candidateFontDirs = [
+  process.env.FONTS_DIR,
+  '/var/www/biodata99/client/public/fonts',
+  '/var/www/biodata99/client/dist/fonts',
   path.resolve(__dirname, '../../assets/fonts'),
   path.resolve(process.cwd(), 'assets/fonts'),
   path.resolve(__dirname, '../../../client/public/fonts'),
   path.resolve(process.cwd(), '../client/public/fonts'),
   path.resolve(process.cwd(), 'public/fonts'),
-].filter((dir) => {
+].filter(Boolean).filter((dir) => {
   try {
     return fs.existsSync(dir);
   } catch {
