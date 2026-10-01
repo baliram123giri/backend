@@ -271,10 +271,8 @@ export async function setupPageSecurity(page) {
       const port = parsedUrl.port ? Number(parsedUrl.port) : (parsedUrl.protocol === 'https:' ? 443 : 80);
       const pathname = decodeURIComponent(parsedUrl.pathname);
 
-      // Block redundant external Google Fonts requests and analytics since all 44 fonts are loaded locally in 0ms
+      // Block redundant external analytics
       if (
-        hostname === 'fonts.googleapis.com' ||
-        hostname === 'fonts.gstatic.com' ||
         hostname.includes('google-analytics') ||
         hostname.includes('googletagmanager') ||
         hostname.includes('doubleclick')
@@ -509,42 +507,247 @@ async function waitForAssets(page) {
 }
 
 
+// ─── Embedded Base64 Font Engine for 100% Offline Vector PDF & Image Rendering ───
+const candidateFontDirs = [
+  path.resolve(__dirname, '../../assets/fonts'),
+  path.resolve(process.cwd(), 'assets/fonts'),
+  path.resolve(__dirname, '../../../client/public/fonts'),
+  path.resolve(process.cwd(), '../client/public/fonts'),
+  path.resolve(process.cwd(), 'public/fonts'),
+].filter((dir) => {
+  try {
+    return fs.existsSync(dir);
+  } catch {
+    return false;
+  }
+});
+
+const fontDataUrlCache = new Map();
+
+function getFontDataUrl(filename, mimeType = 'font/truetype') {
+  if (fontDataUrlCache.has(filename)) {
+    return fontDataUrlCache.get(filename);
+  }
+  for (const dir of candidateFontDirs) {
+    const fullPath = path.join(dir, filename);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      try {
+        const b64 = fs.readFileSync(fullPath).toString('base64');
+        const dataUrl = `data:${mimeType};charset=utf-8;base64,${b64}`;
+        fontDataUrlCache.set(filename, dataUrl);
+        return dataUrl;
+      } catch {}
+    }
+  }
+  return null;
+}
+
+const FONT_MAP = [
+  {
+    family: 'Great Vibes',
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['great vibes', 'greatvibes'],
+  },
+  {
+    family: 'Alex Brush',
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['alex brush', 'alexbrush'],
+  },
+  {
+    family: 'Sacramento',
+    files: [{ file: 'GreatVibes-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['sacramento'],
+  },
+  {
+    family: 'Poppins',
+    files: [
+      { file: 'poppins-400.woff2', fallback: 'Poppins-Regular.ttf', mime: 'font/woff2', weight: '100 400' },
+      { file: 'poppins-600.woff2', fallback: 'Poppins-SemiBold.ttf', mime: 'font/woff2', weight: '500 600' },
+      { file: 'poppins-700.woff2', fallback: 'Poppins-Bold.ttf', mime: 'font/woff2', weight: '700 900' },
+    ],
+    aliases: ['poppins'],
+  },
+  {
+    family: 'Cinzel',
+    files: [
+      { file: 'Cinzel-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'Cinzel-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['cinzel'],
+  },
+  {
+    family: 'Montserrat',
+    files: [
+      { file: 'Montserrat-Regular.ttf', mime: 'font/truetype', weight: '100 400' },
+      { file: 'Montserrat-SemiBold.ttf', mime: 'font/truetype', weight: '500 600' },
+      { file: 'Montserrat-Bold.ttf', mime: 'font/truetype', weight: '700 900' },
+    ],
+    aliases: ['montserrat'],
+  },
+  {
+    family: 'Playfair Display',
+    files: [
+      { file: 'PlayfairDisplay-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'PlayfairDisplay-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['playfair display', 'playfairdisplay'],
+  },
+  {
+    family: 'Cormorant Garamond',
+    files: [
+      { file: 'CormorantGaramond-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'CormorantGaramond-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['cormorant garamond', 'cormorantgaramond'],
+  },
+  {
+    family: 'EB Garamond',
+    files: [
+      { file: 'EBGaramond-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'EBGaramond-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['eb garamond', 'ebgaramond'],
+  },
+  {
+    family: 'Lora',
+    files: [
+      { file: 'Lora-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'Lora-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['lora'],
+  },
+  {
+    family: 'Raleway',
+    files: [
+      { file: 'Raleway-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'Raleway-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['raleway'],
+  },
+  {
+    family: 'Inter',
+    files: [
+      { file: 'Inter-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'Inter-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['inter'],
+  },
+  {
+    family: 'Noto Sans Devanagari',
+    files: [
+      { file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans devanagari', 'devanagari'],
+  },
+  {
+    family: 'Noto Serif Devanagari',
+    files: [
+      { file: 'NotoSerif-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSerif-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto serif devanagari', 'noto serif'],
+  },
+  {
+    family: 'Noto Sans Gujarati',
+    files: [
+      { file: 'MuktaVaani-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'MuktaVaani-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans gujarati', 'mukta vaani', 'muktavaani', 'gujarati'],
+  },
+  {
+    family: 'Noto Sans Bengali',
+    files: [
+      { file: 'NotoSansBengali-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSansBengali-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans bengali', 'bengali'],
+  },
+  {
+    family: 'Noto Sans Kannada',
+    files: [
+      { file: 'NotoSansKannada-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSansKannada-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans kannada', 'kannada'],
+  },
+  {
+    family: 'Noto Sans Telugu',
+    files: [
+      { file: 'NotoSansTelugu-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSansTelugu-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans telugu', 'telugu'],
+  },
+  {
+    family: 'Noto Sans Tamil',
+    files: [
+      { file: 'NotoSansTamil-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'NotoSansTamil-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['noto sans tamil', 'tamil'],
+  },
+  {
+    family: 'Mukta Mahee',
+    files: [
+      { file: 'MuktaMahee-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'MuktaMahee-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['mukta mahee', 'muktamahee', 'noto sans gurmukhi', 'gurmukhi', 'punjabi'],
+  },
+  {
+    family: 'Amiri',
+    files: [
+      { file: 'Amiri-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+      { file: 'Amiri-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+    ],
+    aliases: ['amiri', 'noto sans arabic', 'arabic', 'urdu'],
+  },
+  {
+    family: 'Rozha One',
+    files: [{ file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['rozha one', 'rozhaone'],
+  },
+  {
+    family: 'Yatra One',
+    files: [{ file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['yatra one', 'yatraone'],
+  },
+  {
+    family: 'Tillana',
+    files: [{ file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '100 900' }],
+    aliases: ['tillana'],
+  },
+];
+
+export function generateInlinedFontCss(html = '') {
+  let css = '';
+  const lower = (html || '').toLowerCase();
+
+  for (const def of FONT_MAP) {
+    const isMatched =
+      def.family === 'Poppins' ||
+      def.aliases.some((alias) => lower.includes(alias));
+
+    if (!isMatched) continue;
+
+    for (const f of def.files) {
+      let dataUrl = getFontDataUrl(f.file, f.mime);
+      if (!dataUrl && f.fallback) {
+        dataUrl = getFontDataUrl(f.fallback, 'font/truetype');
+      }
+      if (dataUrl) {
+        css += `@font-face { font-family: '${def.family}'; src: url('${dataUrl}') format('${f.mime === 'font/woff2' ? 'woff2' : 'truetype'}'); font-weight: ${f.weight}; font-style: normal; font-display: block; }\n`;
+      }
+    }
+  }
+
+  return css;
+}
+
 // ─── HTML Normalization & CSS Guarantees ───────────────────────────────────────
 const GUARANTEE_CSS = `
-  /* Embedded local font definitions for 0ms offline font rendering */
-  @font-face { font-family: 'Cinzel'; src: url('/fonts/Cinzel-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Cinzel'; src: url('/fonts/Cinzel-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-SemiBold.ttf') format('truetype'); font-weight: 600; font-display: swap; }
-  @font-face { font-family: 'Poppins'; src: url('/fonts/Poppins-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Montserrat'; src: url('/fonts/Montserrat-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Montserrat'; src: url('/fonts/Montserrat-SemiBold.ttf') format('truetype'); font-weight: 600; font-display: swap; }
-  @font-face { font-family: 'Montserrat'; src: url('/fonts/Montserrat-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Playfair Display'; src: url('/fonts/PlayfairDisplay-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Playfair Display'; src: url('/fonts/PlayfairDisplay-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Great Vibes'; src: url('/fonts/GreatVibes-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Devanagari'; src: url('/fonts/NotoSansDevanagari-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Devanagari'; src: url('/fonts/NotoSansDevanagari-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Noto Serif'; src: url('/fonts/NotoSerif-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Serif'; src: url('/fonts/NotoSerif-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Cormorant Garamond'; src: url('/fonts/CormorantGaramond-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Cormorant Garamond'; src: url('/fonts/CormorantGaramond-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'EB Garamond'; src: url('/fonts/EBGaramond-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'EB Garamond'; src: url('/fonts/EBGaramond-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Lora'; src: url('/fonts/Lora-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Lora'; src: url('/fonts/Lora-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Raleway'; src: url('/fonts/Raleway-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Raleway'; src: url('/fonts/Raleway-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Inter'; src: url('/fonts/Inter-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Inter'; src: url('/fonts/Inter-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Bengali'; src: url('/fonts/NotoSansBengali-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Bengali'; src: url('/fonts/NotoSansBengali-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Kannada'; src: url('/fonts/NotoSansKannada-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Kannada'; src: url('/fonts/NotoSansKannada-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Telugu'; src: url('/fonts/NotoSansTelugu-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Telugu'; src: url('/fonts/NotoSansTelugu-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Tamil'; src: url('/fonts/NotoSansTamil-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
-  @font-face { font-family: 'Noto Sans Tamil'; src: url('/fonts/NotoSansTamil-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
   *, ::before, ::after { box-sizing: border-box; }
   html, body {
     margin: 0 !important;
@@ -762,34 +965,12 @@ export function prepareNormalizedHtml(fullHtml) {
   // 1. Sanitize &quot; inside inline style attributes so SVG and CSS rules are not corrupted
   normalizedHtml = normalizedHtml.replace(/&quot;/g, "'");
 
-  // 1.5 Strip external Google Fonts stylesheets — all 44 fonts are already embedded locally in GUARANTEE_CSS
-  normalizedHtml = normalizedHtml
-    .replace(/<link[^>]*href=["'][^"']*fonts\.googleapis\.com[^"']*["'][^>]*>/gi, '')
-    .replace(/<link[^>]*href=["'][^"']*fonts\.gstatic\.com[^"']*["'][^>]*>/gi, '');
-
-  // 2. Prevent Chromium Skia faux-bold glyph collapse on cursive script fonts ONLY when combined with gradient text clipping.
-  // Single-weight fonts like Great Vibes/Alex Brush only have 400. Faux-bold 700/800 breaks PDFium gradient text clipping (background-clip: text).
-  // For solid text (like header mantra and title), keep font-weight (700/800) so Chromium renders synthetic bold matching the preview.
-  const scriptRegex = /Great Vibes|Alex Brush|Allura|Rozha One|Yatra One|Tangerine|Parisienne|Cookie|Dancing Script|Satisfy|Kaushan Script|Marck Script/i;
-  const gradientClipRegex = /background-clip:\s*text|-webkit-background-clip:\s*text/i;
-  normalizedHtml = normalizedHtml
-    .replace(/style="([^"]*)"/gi, (match, content) => {
-      if (scriptRegex.test(content) && gradientClipRegex.test(content)) {
-        return `style="${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}"`;
-      }
-      return match;
-    })
-    .replace(/style='([^']*)'/gi, (match, content) => {
-      if (scriptRegex.test(content) && gradientClipRegex.test(content)) {
-        return `style='${content.replace(/font-weight:\s*(?:700|800|900|bold|bolder)/gi, 'font-weight: 400')}'`;
-      }
-      return match;
-    });
+  const inlinedFontCss = generateInlinedFontCss(normalizedHtml);
 
   if (normalizedHtml.includes('</head>')) {
-    normalizedHtml = normalizedHtml.replace('</head>', `<style>${GUARANTEE_CSS}</style></head>`);
+    normalizedHtml = normalizedHtml.replace('</head>', `<style>${inlinedFontCss}\n${GUARANTEE_CSS}</style></head>`);
   } else {
-    normalizedHtml = `<style>${GUARANTEE_CSS}</style>` + normalizedHtml;
+    normalizedHtml = `<style>${inlinedFontCss}\n${GUARANTEE_CSS}</style>` + normalizedHtml;
   }
 
   return normalizedHtml;
