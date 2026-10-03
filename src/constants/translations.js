@@ -1,3 +1,6 @@
+import { JAIN_GOTRA_TRANSLATIONS, VEDIC_GOTRA_TRANSLATIONS, getCanonicalGotraKey } from "./gotraTranslations.js";
+export { getCanonicalGotraKey };
+
 export const LANGUAGES = ["English", "हिंदी", "मराठी", "ગુજરાતી", "বাংলা", "தமிழ்", "తెలుగు", "ಕನ್ನಡ", "ਪੰਜਾਬੀ", "اردو"];
 
 export const LANGUAGE_DISPLAY_NAMES = {
@@ -17,7 +20,17 @@ export function translateDynamicOption(opt, t, fieldId) {
   if (!opt) return opt;
   if (opt.trim().toLowerCase() === "other") return t["Other"] || opt;
 
-  let translated = t[opt] || opt;
+  const trimmed = typeof opt === "string" ? opt.trim() : "";
+  let translated = t[opt] || (trimmed ? t[trimmed] : null);
+  if (!translated && trimmed) {
+    const canonicalKey = getCanonicalGotraKey(trimmed);
+    if (canonicalKey && t[canonicalKey]) {
+      translated = t[canonicalKey];
+    }
+  }
+  if (!translated) {
+    translated = opt;
+  }
   if (translated.includes("ft")) {
     translated = translated.replace(/\bft\b/g, t.ft || "ft");
   }
@@ -3757,6 +3770,12 @@ const communityKeys = {
 Object.keys(communityKeys).forEach(lang => {
   if (translations[lang]) {
     Object.assign(translations[lang], communityKeys[lang]);
+    if (JAIN_GOTRA_TRANSLATIONS[lang]) {
+      Object.assign(translations[lang], JAIN_GOTRA_TRANSLATIONS[lang]);
+    }
+    if (VEDIC_GOTRA_TRANSLATIONS[lang]) {
+      Object.assign(translations[lang], VEDIC_GOTRA_TRANSLATIONS[lang]);
+    }
   }
 });
 

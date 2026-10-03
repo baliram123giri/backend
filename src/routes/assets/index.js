@@ -52,6 +52,7 @@ app.get('/api/hero-slides', async (request, reply) => {
       });
       return { slides };
     });
+    reply.header('Cache-Control', 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400');
     return data;
   } catch (error) {
     app.log.error('Fetch hero slides database error:', error);

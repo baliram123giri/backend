@@ -183,6 +183,7 @@ export default async function publicTemplateRoutes(app, options) {
         return { templates, hasMore, total };
       });
 
+      reply.header('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=86400');
       return data;
     } catch (error) {
       app.log.error('Fetch templates database error:', error);
@@ -228,6 +229,7 @@ export default async function publicTemplateRoutes(app, options) {
         return { templates: dbTemplates };
       });
 
+      reply.header('Cache-Control', 'public, max-age=600, s-maxage=3600, stale-while-revalidate=86400');
       return data;
     } catch (error) {
       app.log.error('Fetch template thumbnails database error:', error);

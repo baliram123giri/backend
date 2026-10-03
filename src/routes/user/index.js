@@ -40,6 +40,7 @@ app.get('/api/bootstrap', async (request, reply) => {
       };
     });
 
+    reply.header('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=86400');
     return reply.send({ success: true, ...data });
   } catch (error) {
     app.log.error('GET Bootstrap Error:', error);
@@ -66,6 +67,7 @@ app.get('/api/review-settings', async (request, reply) => {
         }
       });
     });
+    reply.header('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400');
     return reply.send({ success: true, settings });
   } catch (error) {
     app.log.error('GET Public Review Settings Error:', error);
