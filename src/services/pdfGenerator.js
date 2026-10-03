@@ -362,7 +362,7 @@ export async function setupPageSecurity(page) {
               .replace('//localhost:', '//127.0.0.1:')
               .replace('//[::1]:', '//127.0.0.1:');
 
-        const fetchTimeout = pathname.includes('proxy-logo') ? 4000 : 2500;
+        const fetchTimeout = pathname.includes('proxy-logo') ? 1500 : 2500;
         fetch(safeUrl, {
           signal: AbortSignal.timeout(fetchTimeout),
           headers: {
@@ -381,8 +381,14 @@ export async function setupPageSecurity(page) {
               body: buffer,
             }).catch(() => {});
           }
+          if (pathname.includes('proxy-logo')) {
+            return req.abort('failed').catch(() => {});
+          }
           return req.continue().catch(() => {});
         }).catch(() => {
+          if (pathname.includes('proxy-logo')) {
+            return req.abort('failed').catch(() => {});
+          }
           req.continue().catch(() => {});
         });
         return;
@@ -499,8 +505,12 @@ async function waitForAssets(page) {
           if (!src || src === window.location.href || src.endsWith('#') || src === 'about:blank') {
             return Promise.resolve();
           }
+          const isLogo = img.dataset?.logoImg === 'true' || src.includes('proxy-logo');
           if (img.complete) {
-            if (img.naturalWidth === 0 && !src.startsWith('data:image/svg')) {
+            if ((img.naturalWidth === 0 || (isLogo && img.naturalWidth <= 1)) && !src.startsWith('data:image/svg')) {
+              if (isLogo) {
+                try { img.remove(); } catch {}
+              }
               return Promise.resolve(); // Broken image, don't wait
             }
             return typeof img.decode === 'function'
@@ -508,11 +518,21 @@ async function waitForAssets(page) {
               : Promise.resolve();
           }
           return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve(), 600); // 600ms max wait per image
+            const timer = setTimeout(() => {
+              if (isLogo) {
+                try { img.remove(); } catch {}
+              }
+              resolve();
+            }, isLogo ? 300 : 600); // 300ms max wait for logo, 600ms for other images
             img.addEventListener('load', () => {
               clearTimeout(timer);
+              if (isLogo && (img.naturalWidth <= 1 || img.naturalHeight <= 1)) {
+                try { img.remove(); } catch {}
+                resolve();
+                return;
+              }
               if (typeof img.decode === 'function') {
-                Promise.race([img.decode(), new Promise((r) => setTimeout(r, 400))])
+                Promise.race([img.decode(), new Promise((r) => setTimeout(r, 300))])
                   .catch(() => {})
                   .finally(resolve);
               } else {
@@ -521,6 +541,9 @@ async function waitForAssets(page) {
             }, { once: true });
             img.addEventListener('error', () => {
               clearTimeout(timer);
+              if (isLogo) {
+                try { img.remove(); } catch {}
+              }
               resolve();
             }, { once: true });
           });
