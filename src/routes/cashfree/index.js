@@ -873,6 +873,14 @@ export default async function cashfreeRoutes(app, options) {
             })
           ).catch((e) => app.log.warn('[Cashfree Callback] Order status DB update warn:', e.message));
 
+          if (redis && redis.status === 'ready') {
+            try {
+              const keys = await redis.keys('transactions:*');
+              if (keys.length > 0) await redis.del(keys);
+              await redis.del('admin:dashboard-stats');
+            } catch { }
+          }
+
           if (isCancelled || finalStatus === 'cancelled') {
             app.log.info(`[Cashfree Callback] Order ${orderId} cancelled by user. Redirecting directly to ${returnPath}.`);
             const separator = returnPath.includes('?') ? '&' : '?';
@@ -1034,6 +1042,14 @@ export default async function cashfreeRoutes(app, options) {
             },
           })
         ).catch(() => { });
+
+        if (redis && redis.status === 'ready') {
+          try {
+            const keys = await redis.keys('transactions:*');
+            if (keys.length > 0) await redis.del(keys);
+            await redis.del('admin:dashboard-stats');
+          } catch { }
+        }
       }
 
       return reply.send({ success: true, message: 'Webhook received' });
