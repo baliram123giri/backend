@@ -395,9 +395,21 @@ export default async function cashfreeRoutes(app, options) {
         });
       }
 
-      // Determine return URL for redirect checkout
+      // Determine return URL and return path for redirect checkout
       const originHeader = request.headers.origin || request.headers.referer || 'https://biodata99.com';
       const cleanOrigin = originHeader.split('/api')[0].replace(/\/+$/, '');
+
+      let returnPath = '/';
+      if (request.body?.returnPath && typeof request.body.returnPath === 'string' && request.body.returnPath.startsWith('/')) {
+        returnPath = request.body.returnPath;
+      } else if (request.headers.referer) {
+        try {
+          const refUrl = new URL(request.headers.referer);
+          if (refUrl.pathname && refUrl.pathname !== '/') {
+            returnPath = refUrl.pathname;
+          }
+        } catch {}
+      }
 
       // Backend callback URL that verifies the order and then redirects to the frontend
       const proto = request.headers['x-forwarded-proto'] || (config.isProduction ? 'https' : 'http');
@@ -407,7 +419,7 @@ export default async function cashfreeRoutes(app, options) {
       if (config.isProduction || (!serverBaseUrl.includes('localhost') && !serverBaseUrl.includes('127.0.0.1'))) {
         serverBaseUrl = serverBaseUrl.replace(/^http:\/\//i, 'https://');
       }
-      const returnUrl = `${serverBaseUrl}/api/cashfree/callback?order_id={order_id}&client_origin=${encodeURIComponent(cleanOrigin)}`;
+      const returnUrl = `${serverBaseUrl}/api/cashfree/callback?order_id={order_id}&client_origin=${encodeURIComponent(cleanOrigin)}&return_path=${encodeURIComponent(returnPath)}`;
       const notifyUrl = `${serverBaseUrl}/api/cashfree/webhook`;
 
       // Parallel DB write + Cashfree API call for ultra-fast response
@@ -626,34 +638,39 @@ export default async function cashfreeRoutes(app, options) {
                 customerName: order.customerName,
               },
             });
-          } else if (cfOrder && ['EXPIRED', 'TERMINATED', 'CANCELLED'].includes(cfOrder.order_status)) {
+          } else if (cfOrder) {
             const payments = await getCashfreeOrderPayments(order.razorpayOrderId).catch(() => []);
+            const droppedPay = payments.find((p) => ['USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
             const failedPay = payments.find((p) => ['FAILED', 'USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
-            const isCancelled = cfOrder.order_status === 'CANCELLED' || failedPay?.payment_status === 'USER_DROPPED' || failedPay?.payment_status === 'CANCELLED';
-            const finalStatus = isCancelled ? 'cancelled' : 'failed';
-            const failureReason = failedPay?.payment_message || (isCancelled ? 'Payment cancelled by user' : `Order ${cfOrder.order_status.toLowerCase()}`);
+            const isExplicitlyCancelled = cfOrder.order_status === 'CANCELLED' || Boolean(droppedPay);
+            const isTerminatedOrExpired = ['EXPIRED', 'TERMINATED'].includes(cfOrder.order_status);
 
-            await withRetry(() =>
-              prisma.order.updateMany({
-                where: { id: order.id, status: { not: 'paid' } },
-                data: {
-                  status: finalStatus,
-                  downloadErrorMsg: String(failureReason).slice(0, 500),
-                },
-              })
-            ).catch(() => { });
+            if (isExplicitlyCancelled || isTerminatedOrExpired || (failedPay && failedPay.payment_status === 'FAILED')) {
+              const finalStatus = isExplicitlyCancelled ? 'cancelled' : 'failed';
+              const failureReason = droppedPay?.payment_message || failedPay?.payment_message || (isExplicitlyCancelled ? 'Payment cancelled by user' : `Order ${cfOrder.order_status.toLowerCase()}`);
 
-            return reply.send({
-              success: true,
-              status: finalStatus,
-              error: failureReason,
-              order: {
-                id: order.id,
-                orderId: order.razorpayOrderId,
+              await withRetry(() =>
+                prisma.order.updateMany({
+                  where: { id: order.id, status: { not: 'paid' } },
+                  data: {
+                    status: finalStatus,
+                    downloadErrorMsg: String(failureReason).slice(0, 500),
+                  },
+                })
+              ).catch(() => { });
+
+              return reply.send({
+                success: true,
                 status: finalStatus,
-                format: order.format,
-              },
-            });
+                error: failureReason,
+                order: {
+                  id: order.id,
+                  orderId: order.razorpayOrderId,
+                  status: finalStatus,
+                  format: order.format,
+                },
+              });
+            }
           }
         } catch (queryErr) {
           app.log.warn(`[Cashfree Status] Query warning for ${order.razorpayOrderId}:`, queryErr.message);
@@ -704,6 +721,12 @@ export default async function cashfreeRoutes(app, options) {
           } catch { }
         }
 
+        let returnPath = '/';
+        const candidatePath = query.return_path || body.return_path;
+        if (candidatePath && typeof candidatePath === 'string' && candidatePath.startsWith('/')) {
+          returnPath = candidatePath;
+        }
+
         const orderId = query.order_id || body.order_id;
         if (!orderId) {
           return reply.redirect(`${clientUrl}/payment-processing?status=failed&error=Missing%20Order%20ID`, 303);
@@ -728,6 +751,14 @@ export default async function cashfreeRoutes(app, options) {
                 const successPay = payments.find((p) => p.payment_status === 'SUCCESS');
                 paymentId = successPay?.cf_payment_id ? String(successPay.cf_payment_id) : `cf_paid_${Date.now()}`;
                 break; // confirmed PAID — exit retry loop
+              }
+
+              // Check if user dropped or cancelled payment — break retry loop immediately without 10s wait
+              const payments = await getCashfreeOrderPayments(orderId).catch(() => []);
+              const droppedPay = payments.find((p) => ['USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
+              if (droppedPay) {
+                app.log.info(`[Cashfree Callback] Order ${orderId} payment is ${droppedPay.payment_status} — breaking retry loop immediately`);
+                break;
               }
 
               // If order is explicitly CANCELLED/TERMINATED, stop retrying early
@@ -777,45 +808,58 @@ export default async function cashfreeRoutes(app, options) {
             303
           );
         } else {
-          // If Cashfree says order is still ACTIVE (UPI bank settlement in progress),
-          // DO NOT mark it failed in the database! Redirect to confirming state for polling.
-          if (config.isConfigured) {
-            try {
-              const cfOrder = await getCashfreeOrderStatus(orderId).catch(() => null);
-              if (cfOrder && cfOrder.order_status === 'ACTIVE') {
-                app.log.info(`[Cashfree Callback] Order ${orderId} is still ACTIVE. Redirecting to confirming state for client polling.`);
-                return reply.redirect(
-                  `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=confirming`,
-                  303
-                );
-              }
-            } catch {}
-          }
-
           // Extract specific failure or cancellation reason from Cashfree payments
           let failureReason = 'Payment was cancelled or could not be completed';
           let finalStatus = 'failed';
+          let isCancelled = false;
+
+          const queryError = (query.error || body.error || '').toLowerCase();
+          if (queryError.includes('cancel') || queryError.includes('drop')) {
+            finalStatus = 'cancelled';
+            isCancelled = true;
+          }
 
           if (config.isConfigured) {
             try {
               const cfOrder = await getCashfreeOrderStatus(orderId).catch(() => null);
               const payments = await getCashfreeOrderPayments(orderId).catch(() => []);
+
+              const droppedPay = payments.find((p) => ['USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
               const failedPay = payments.find((p) => ['FAILED', 'USER_DROPPED', 'CANCELLED'].includes(p.payment_status)) || payments[0];
-              if (failedPay) {
+
+              if (droppedPay) {
+                finalStatus = 'cancelled';
+                isCancelled = true;
+                failureReason = droppedPay.payment_message || 'Transaction was cancelled by user';
+              } else if (cfOrder?.order_status === 'CANCELLED' || cfOrder?.order_status === 'TERMINATED') {
+                finalStatus = 'cancelled';
+                isCancelled = true;
+                failureReason = 'Order was cancelled';
+              } else if (failedPay) {
                 failureReason = failedPay.payment_message || failedPay.error_details?.error_description || failedPay.error_details?.error_reason || `Payment ${failedPay.payment_status.toLowerCase().replace('_', ' ')}`;
-                if (failedPay.payment_status === 'USER_DROPPED' || failedPay.payment_status === 'CANCELLED') {
+                if (['USER_DROPPED', 'CANCELLED'].includes(failedPay.payment_status)) {
                   finalStatus = 'cancelled';
+                  isCancelled = true;
+                }
+              } else if (cfOrder && cfOrder.order_status === 'ACTIVE') {
+                // Check if any payment is genuinely PENDING settlement (UPI app switch)
+                const hasPendingPay = payments.some((p) => p.payment_status === 'PENDING');
+                if (hasPendingPay) {
+                  app.log.info(`[Cashfree Callback] Order ${orderId} has PENDING payment. Redirecting to confirming state for client polling.`);
+                  return reply.redirect(
+                    `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=confirming`,
+                    303
+                  );
+                } else {
+                  // Order is ACTIVE on Cashfree but user returned via return_url without paying -> user exited/cancelled
+                  finalStatus = 'cancelled';
+                  isCancelled = true;
+                  failureReason = 'Payment checkout was cancelled';
                 }
               }
-              if (cfOrder?.order_status === 'CANCELLED' || cfOrder?.order_status === 'TERMINATED') {
-                finalStatus = 'cancelled';
-              }
-            } catch { }
-          }
-
-          const queryError = (query.error || body.error || '').toLowerCase();
-          if (queryError.includes('cancel') || queryError.includes('drop')) {
-            finalStatus = 'cancelled';
+            } catch (cfErr) {
+              app.log.warn('[Cashfree Callback] Error inspecting payments:', cfErr);
+            }
           }
 
           // Mark order in backend database as 'cancelled' or 'failed' (if not already paid)
@@ -828,6 +872,12 @@ export default async function cashfreeRoutes(app, options) {
               },
             })
           ).catch((e) => app.log.warn('[Cashfree Callback] Order status DB update warn:', e.message));
+
+          if (isCancelled || finalStatus === 'cancelled') {
+            app.log.info(`[Cashfree Callback] Order ${orderId} cancelled by user. Redirecting directly to ${returnPath}.`);
+            const separator = returnPath.includes('?') ? '&' : '?';
+            return reply.redirect(`${clientUrl}${returnPath}${separator}cancelled=1`, 303);
+          }
 
           return reply.redirect(
             `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=${finalStatus}&error=${encodeURIComponent(failureReason)}`,
