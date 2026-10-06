@@ -404,22 +404,28 @@ export default async function routes(app, options) {
         const cachedBase64 = await redis.get(docCacheKey).catch(() => null);
         if (cachedBase64) {
           const cachedBuf = Buffer.from(cachedBase64, 'base64');
-          let contentType = 'application/pdf';
-          let ext = '.pdf';
-          let cat = 'biodata';
-          if (format === 'PNG') { contentType = 'image/png'; ext = '.png'; }
-          else if (format === 'JPG' || format === 'JPEG') { contentType = 'image/jpeg'; ext = '.jpg'; }
-          else if (format === 'COMBO') { contentType = 'application/zip'; ext = '.zip'; cat = 'biodata_combo'; }
+          const isInvalidPdf = format === 'PDF' && (cachedBuf.length < 1000 || !cachedBuf.toString('utf-8', 0, 4).startsWith('%PDF'));
+          if (isInvalidPdf) {
+            app.log.warn(`[Download Paid Order] Purged corrupted PDF cache for order: ${order.razorpayOrderId}`);
+            await redis.del(docCacheKey).catch(() => {});
+          } else {
+            let contentType = 'application/pdf';
+            let ext = '.pdf';
+            let cat = 'biodata';
+            if (format === 'PNG') { contentType = 'image/png'; ext = '.png'; }
+            else if (format === 'JPG' || format === 'JPEG') { contentType = 'image/jpeg'; ext = '.jpg'; }
+            else if (format === 'COMBO') { contentType = 'application/zip'; ext = '.zip'; cat = 'biodata_combo'; }
 
-          const fileName = `${cleanName}${ext}`;
-          const contentDisposition = getContentDisposition(fileName, cat, ext);
+            const fileName = `${cleanName}${ext}`;
+            const contentDisposition = getContentDisposition(fileName, cat, ext);
 
-          return reply
-            .header('Content-Type', contentType)
-            .header('Content-Disposition', contentDisposition)
-            .header('Content-Length', cachedBuf.length)
-            .header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            .send(cachedBuf);
+            return reply
+              .header('Content-Type', contentType)
+              .header('Content-Disposition', contentDisposition)
+              .header('Content-Length', cachedBuf.length)
+              .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+              .send(cachedBuf);
+          }
         }
       }
 
@@ -434,7 +440,11 @@ export default async function routes(app, options) {
 
             // Cache generated buffer in Redis for 1 hour to make any re-download / retry instant (5ms)
             if (bufferToCache && redis && redis.status === 'ready') {
-              redis.set(docCacheKey, bufferToCache.toString('base64'), 'EX', 3600).catch(() => {});
+              const buf = Buffer.isBuffer(bufferToCache) ? bufferToCache : Buffer.from(bufferToCache);
+              const isValid = format !== 'PDF' || (buf.length >= 1000 && buf.toString('utf-8', 0, 4).startsWith('%PDF'));
+              if (isValid) {
+                redis.set(docCacheKey, buf.toString('base64'), 'EX', 3600).catch(() => {});
+              }
             }
           });
         }

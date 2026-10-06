@@ -1077,13 +1077,14 @@ export async function renderHtmlToVectorPdf(fullHtml, options = {}) {
     const waitMs = Date.now() - tWait0;
 
     const tPdf0 = Date.now();
-    const pdfBuffer = await page.pdf({
+    const rawPdf = await page.pdf({
       format: 'A4',
       printBackground: true,
       margin: { top: 0, right: 0, bottom: 0, left: 0 },
       preferCSSPageSize: true,
       displayHeaderFooter: false,
     });
+    const pdfBuffer = Buffer.isBuffer(rawPdf) ? rawPdf : Buffer.from(rawPdf);
     const pdfMs = Date.now() - tPdf0;
 
     const totalTimeMs = Date.now() - renderStart;
