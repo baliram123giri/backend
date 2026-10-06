@@ -26,26 +26,32 @@ export default async function restoreDownloadRoutes(app, options) {
         }
       }
 
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
       // 2. Direct lookup in PostgreSQL
       if (!snapshot) {
         snapshot = await prisma.downloadSnapshot.findFirst({
           where: {
             OR: [
-              { id },
-              { downloadLogId: id },
+              ...(isUuid ? [{ id }, { downloadLogId: id }] : []),
               { orderId: id },
             ],
           },
           orderBy: { createdAt: 'desc' },
-        });
+        }).catch(() => null);
       }
 
-      // 3. If id is an Order primary key (UUID), resolve its orderId
+      // 3. If id is an Order primary key (UUID) or Cashfree/Razorpay order ID, resolve its snapshot
       if (!snapshot) {
-        const order = await prisma.order.findUnique({
-          where: { id },
-          select: { id: true, razorpayOrderId: true },
-        });
+        const order = isUuid
+          ? await prisma.order.findUnique({
+              where: { id },
+              select: { id: true, razorpayOrderId: true },
+            }).catch(() => null)
+          : await prisma.order.findFirst({
+              where: { razorpayOrderId: id },
+              select: { id: true, razorpayOrderId: true },
+            }).catch(() => null);
 
         if (order) {
           snapshot = await prisma.downloadSnapshot.findFirst({
@@ -56,15 +62,19 @@ export default async function restoreDownloadRoutes(app, options) {
               ],
             },
             orderBy: { createdAt: 'desc' },
-          });
+          }).catch(() => null);
         }
       }
 
       // 4. If id is a DownloadLog primary key, resolve its snapshot
       if (!snapshot) {
-        const dLog = await prisma.downloadLog.findUnique({
-          where: { id },
-        });
+        const dLog = isUuid
+          ? await prisma.downloadLog.findUnique({
+              where: { id },
+            }).catch(() => null)
+          : await prisma.downloadLog.findFirst({
+              where: { orderId: id },
+            }).catch(() => null);
 
         if (dLog) {
           // 4a. If orderId exists, check by downloadLogId or orderId
@@ -77,7 +87,7 @@ export default async function restoreDownloadRoutes(app, options) {
                 ],
               },
               orderBy: { createdAt: 'desc' },
-            });
+            }).catch(() => null);
           }
 
           // 4b. Direct downloadLogId match

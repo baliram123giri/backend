@@ -8,7 +8,7 @@ export async function adminAuth(request, reply) {
     return;
   }
 
-  const auth = request.headers['x-admin-key'];
+  const auth = request.headers['x-admin-key'] || request.query?.token || request.query?.adminKey;
   
   if (!auth || typeof auth !== 'string') {
     return reply.status(401).send({ error: 'Unauthorized' });
