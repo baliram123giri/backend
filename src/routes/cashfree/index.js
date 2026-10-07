@@ -753,12 +753,27 @@ export default async function cashfreeRoutes(app, options) {
                 break; // confirmed PAID — exit retry loop
               }
 
-              // Check if user dropped or cancelled payment — break retry loop immediately without 10s wait
+              // Check payment status — but don't break early on USER_DROPPED alone:
+              // UPI payments (PhonePe, GPay) can briefly show USER_DROPPED before settling as SUCCESS.
               const payments = await getCashfreeOrderPayments(orderId).catch(() => []);
-              const droppedPay = payments.find((p) => ['USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
-              if (droppedPay) {
-                app.log.info(`[Cashfree Callback] Order ${orderId} payment is ${droppedPay.payment_status} — breaking retry loop immediately`);
-                break;
+              const hasSuccessPayment = payments.some((p) => p.payment_status === 'SUCCESS');
+              if (hasSuccessPayment) {
+                // A successful payment exists — this order will settle; keep retrying to confirm PAID status
+                app.log.info(`[Cashfree Callback] Order ${orderId} has a SUCCESS payment alongside non-PAID status — continuing retries`);
+              } else {
+                const droppedPay = payments.find((p) => p.payment_status === 'USER_DROPPED');
+                const cancelledPay = payments.find((p) => p.payment_status === 'CANCELLED');
+                // Only break early if payment is definitively cancelled AND there's no success payment
+                // Give USER_DROPPED one more retry cycle since UPI can recover
+                if (cancelledPay) {
+                  app.log.info(`[Cashfree Callback] Order ${orderId} payment is CANCELLED — breaking retry loop`);
+                  break;
+                }
+                if (droppedPay && attempt >= 1) {
+                  // Only bail on USER_DROPPED after at least one retry (not immediately on first attempt)
+                  app.log.info(`[Cashfree Callback] Order ${orderId} payment is USER_DROPPED after ${attempt + 1} attempts — breaking retry loop`);
+                  break;
+                }
               }
 
               // If order is explicitly CANCELLED/TERMINATED, stop retrying early
@@ -824,10 +839,38 @@ export default async function cashfreeRoutes(app, options) {
               const cfOrder = await getCashfreeOrderStatus(orderId).catch(() => null);
               const payments = await getCashfreeOrderPayments(orderId).catch(() => []);
 
-              const droppedPay = payments.find((p) => ['USER_DROPPED', 'CANCELLED'].includes(p.payment_status));
-              const failedPay = payments.find((p) => ['FAILED', 'USER_DROPPED', 'CANCELLED'].includes(p.payment_status)) || payments[0];
+              // CRITICAL: Always check for a SUCCESS payment first.
+              // UPI payments can show USER_DROPPED briefly before settling successfully.
+              const successPay = payments.find((p) => p.payment_status === 'SUCCESS');
+              if (successPay || cfOrder?.order_status === 'PAID') {
+                // Payment actually succeeded — override isPaid and redirect to success
+                app.log.info(`[Cashfree Callback] Order ${orderId} has SUCCESS payment despite non-PAID redirect — correcting to paid`);
+                const payId = successPay?.cf_payment_id ? String(successPay.cf_payment_id) : `cf_paid_${Date.now()}`;
+                await withRetry(() =>
+                  prisma.order.update({
+                    where: { razorpayOrderId: orderId },
+                    data: {
+                      status: 'paid',
+                      razorpayPaymentId: payId,
+                      razorpaySignature: 'cashfree_redirect_verified',
+                    },
+                  })
+                ).catch((e) => app.log.warn('[Cashfree Callback] Corrected paid update warn:', e.message));
+                return reply.redirect(
+                  `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=success`,
+                  303
+                );
+              }
 
-              if (droppedPay) {
+              const droppedPay = payments.find((p) => p.payment_status === 'USER_DROPPED');
+              const cancelledPay = payments.find((p) => p.payment_status === 'CANCELLED');
+              const failedPay = payments.find((p) => p.payment_status === 'FAILED') || payments[0];
+
+              if (cancelledPay) {
+                finalStatus = 'cancelled';
+                isCancelled = true;
+                failureReason = cancelledPay.payment_message || 'Transaction was cancelled by user';
+              } else if (droppedPay) {
                 finalStatus = 'cancelled';
                 isCancelled = true;
                 failureReason = droppedPay.payment_message || 'Transaction was cancelled by user';
@@ -835,12 +878,8 @@ export default async function cashfreeRoutes(app, options) {
                 finalStatus = 'cancelled';
                 isCancelled = true;
                 failureReason = 'Order was cancelled';
-              } else if (failedPay) {
-                failureReason = failedPay.payment_message || failedPay.error_details?.error_description || failedPay.error_details?.error_reason || `Payment ${failedPay.payment_status.toLowerCase().replace('_', ' ')}`;
-                if (['USER_DROPPED', 'CANCELLED'].includes(failedPay.payment_status)) {
-                  finalStatus = 'cancelled';
-                  isCancelled = true;
-                }
+              } else if (failedPay && failedPay.payment_status === 'FAILED') {
+                failureReason = failedPay.payment_message || failedPay.error_details?.error_description || failedPay.error_details?.error_reason || 'Payment failed';
               } else if (cfOrder && cfOrder.order_status === 'ACTIVE') {
                 // Check if any payment is genuinely PENDING settlement (UPI app switch)
                 const hasPendingPay = payments.some((p) => p.payment_status === 'PENDING');
