@@ -13,9 +13,7 @@ export default async function statsRoutes(app, options) {
       request.log.error(err);
       return reply.status(500).send({
         success: false,
-        error: 'Failed to retrieve stats',
-        todayCount: 142,
-        totalCount: 12450
+        error: 'Failed to retrieve stats'
       });
     }
   });
