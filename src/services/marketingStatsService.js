@@ -37,11 +37,18 @@ export async function ensureMarketingStatsTable() {
   }
 }
 
+let memoryCachedStats = null;
+let memoryCacheExpiry = 0;
+
 /**
  * Fetch current marketing stats from PostgreSQL.
  * All periodic organic increments are handled natively by pg_cron in the database.
  */
 export async function getMarketingActivityStats() {
+  if (memoryCachedStats && Date.now() < memoryCacheExpiry) {
+    return memoryCachedStats;
+  }
+
   await ensureMarketingStatsTable();
 
   try {
@@ -52,26 +59,32 @@ export async function getMarketingActivityStats() {
     });
 
     if (!rows || rows.length === 0) {
-      return {
+      const fallback = {
         success: true,
         todayCount: 18,
         totalCount: 12480,
         formattedToday: '18',
         formattedTotal: '12,480',
       };
+      memoryCachedStats = fallback;
+      memoryCacheExpiry = Date.now() + 60 * 1000;
+      return fallback;
     }
 
     const current = rows[0];
     const todayCount = Number(current.today_count) || 0;
     const totalCount = Number(current.total_count) || 0;
 
-    return {
+    const result = {
       success: true,
       todayCount,
       totalCount,
       formattedToday: todayCount.toLocaleString('en-IN'),
       formattedTotal: totalCount.toLocaleString('en-IN'),
     };
+    memoryCachedStats = result;
+    memoryCacheExpiry = Date.now() + 60 * 1000;
+    return result;
   } catch (err) {
     console.error('[marketingStatsService] Error querying stats:', err.message);
     return {
@@ -101,6 +114,9 @@ export async function incrementMarketingStats(amount = 1) {
        WHERE id = 'global';`,
       delta
     );
+
+    memoryCachedStats = null;
+    memoryCacheExpiry = 0;
     return await getMarketingActivityStats();
   } catch (err) {
     console.error('[marketingStatsService] Error incrementing:', err.message);

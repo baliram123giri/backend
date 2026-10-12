@@ -754,21 +754,6 @@ const FONT_MAP = [
     ],
     aliases: ['amiri', 'noto sans arabic', 'arabic', 'urdu'],
   },
-  {
-    family: 'Rozha One',
-    files: [{ file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '100 900' }],
-    aliases: ['rozha one', 'rozhaone'],
-  },
-  {
-    family: 'Yatra One',
-    files: [{ file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '100 900' }],
-    aliases: ['yatra one', 'yatraone'],
-  },
-  {
-    family: 'Tillana',
-    files: [{ file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '400' }],
-    aliases: ['tillana'],
-  },
 ];
 
 export function generateInlinedFontCss(html = '') {
@@ -1026,13 +1011,12 @@ export function prepareNormalizedHtml(fullHtml) {
   // 1. Sanitize &quot; inside inline style attributes so SVG and CSS rules are not corrupted
   normalizedHtml = normalizedHtml.replace(/&quot;/g, "'");
 
-  // 2. Strip external Google Fonts, preconnects, and Astro website bundles.
-  // All fonts are inlined as Base64 data: URIs and all layout styling is in GUARANTEE_CSS.
-  // Stripping these prevents Chromium from making 10-15 outbound network calls to Google Fonts/Cloudflare,
-  // cutting PDF render time from 10+ seconds down to ~2 seconds!
+  // 2. Strip Astro website bundles and scripts that are not needed for PDF rendering.
+  // We retain active Google Fonts stylesheet links (<link href="...fonts.googleapis.com...">)
+  // so any web fonts not backed by local base64 files render with 100% fidelity matching the preview.
   normalizedHtml = normalizedHtml
-    .replace(/<link[^>]+(?:fonts\.googleapis\.com|fonts\.gstatic\.com|_astro)[^>]*>/gi, '')
-    .replace(/<link[^>]+rel=["']preconnect["'][^>]*>/gi, '');
+    .replace(/<link[^>]+(?:_astro)[^>]*>/gi, '')
+    .replace(/<script[^>]+(?:_astro)[^>]*>.*?<\/script>/gi, '');
 
   const inlinedFontCss = generateInlinedFontCss(normalizedHtml);
 
