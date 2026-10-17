@@ -200,6 +200,7 @@ export function mapDbTemplateToConfig(dbTpl) {
     mantraSignVertical: dbTpl.mantraSignVertical || "top",
     rawInput: sanitizeRawInput(dbTpl.rawInput),
     religion: dbTpl.religion || "Hindu",
+    gender: dbTpl.gender || undefined,
     isPremium: dbTpl.isPremium === true,
     isDefault: dbTpl.isDefault === true,
     price: dbTpl.price ?? null,

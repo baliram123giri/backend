@@ -53,3 +53,4 @@ export default async function diagnosticRoutes(fastify, options) {
   fastify.get('/health', handleHealth);
   fastify.get('/api/health', handleHealth);
 }
+
