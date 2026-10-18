@@ -7,7 +7,6 @@
     "dev": "node --watch server.js",
     "start": "node server.js",
     "sync:templates": "node src/scripts/sync-and-compress-templates.js",
-    "sync:muslim-templates": "node src/scripts/sync-muslim-templates.js",
     "prisma:generate": "prisma generate",
     "postinstall": "puppeteer browsers install chrome"
   },
