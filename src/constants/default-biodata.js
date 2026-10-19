@@ -25,8 +25,8 @@ export const defaultBiodataValues = {
   ],
   educationDetails: [
     { id: "education", label: "Highest Education", value: "", type: "select", options: ["10th", "12th", "Diploma", "B.A.", "B.Sc.", "B.Com", "B.E. / B.Tech", "BCA", "BBA", "M.A.", "M.Sc.", "M.Com", "M.E. / M.Tech", "MCA", "MBA", "MBBS", "Ph.D.", "CA", "Other"], isDefault: true },
-    { id: "college", label: "College/University", value: "", type: "text", isDefault: true },
-    { id: "occupation", label: "Occupation/Job", value: "", type: "select", options: ["Software Engineer", "Doctor", "Teacher / Professor", "Government Job", "Business", "Self Employed", "Banker", "CA / Accountant", "Lawyer", "Engineer (Non-IT)", "Defense / Police", "Private Job", "Not Working", "Other"], isDefault: true },
+    { id: "college", label: "College", value: "", type: "text", isDefault: true },
+    { id: "occupation", label: "Occupation", value: "", type: "select", options: ["Software Engineer", "Doctor", "Teacher / Professor", "Government Job", "Business", "Self Employed", "Banker", "CA / Accountant", "Lawyer", "Engineer (Non-IT)", "Defense / Police", "Private Job", "Not Working", "Other"], isDefault: true },
     { id: "annualIncome", label: "Annual Income", value: "", type: "text", isDefault: true },
     { id: "companyName", label: "Company Name", value: "", type: "company", isDefault: true },
   ],
