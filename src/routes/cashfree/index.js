@@ -1,4 +1,7 @@
 import zlib from 'zlib';
+import { Readable } from 'node:stream';
+import crypto from 'crypto';
+import { checkClientPrice, priceValidationMode } from '../../services/pricing.js';
 import { prisma, withRetry } from '../../lib/prisma.js';
 import { getCachedOrFetch, redis } from '../../lib/redis.js';
 import {
@@ -43,6 +46,50 @@ async function createCommissionForOrder(order, app) {
   } catch (err) {
     app.log.warn('[Cashfree Commission] Failed to record commission:', err.message);
   }
+}
+
+/**
+ * Move an order to 'paid' exactly once, no matter how many paths report the payment.
+ *
+ * The browser callback, the webhook, GET /order-status, /verify-payment and /download-paid-order can all
+ * learn about the same payment (and the callback is hit again whenever the user re-opens the gateway's
+ * return URL with Back/reload). The status flip is a conditional update, so only the call that really
+ * performs the transition returns `transitioned: true`, and only that call counts the coupon use and
+ * records the affiliate commission. Before this, replays double-counted both, and the webhook and the
+ * download safety net skipped them entirely.
+ */
+export async function markOrderPaid(app, razorpayOrderId, { paymentId, signature, extra = {} }) {
+  const moved = await withRetry(() =>
+    prisma.order.updateMany({
+      where: { razorpayOrderId, status: { not: 'paid' } },
+      data: {
+        status: 'paid',
+        razorpayPaymentId: paymentId,
+        razorpaySignature: signature,
+        ...extra,
+      },
+    })
+  );
+  const order = await withRetry(() => prisma.order.findFirst({ where: { razorpayOrderId } }));
+  const transitioned = moved.count > 0;
+
+  if (transitioned && order) {
+    if (order.couponCode) {
+      withRetry(() =>
+        prisma.coupon.updateMany({
+          where: { code: order.couponCode.trim().toUpperCase() },
+          data: { usedCount: { increment: 1 } },
+        })
+      ).catch((e) => app.log.warn('[Order Paid] Coupon count failed:', e.message));
+    }
+    if (order.referralCode) {
+      createCommissionForOrder(order, app).catch(() => { });
+    }
+    if (redis && redis.status === 'ready') {
+      redis.del('admin:dashboard-stats').catch(() => { });
+    }
+  }
+  return { order, transitioned };
 }
 
 // Snapshot helper for instant post-payment generation
@@ -236,13 +283,12 @@ export default async function cashfreeRoutes(app, options) {
     try {
       const {
         amount,
-        currency = 'INR',
         templateId,
         format,
         customerName,
         customerEmail,
         customerPhone,
-        couponCode,
+        couponCode: rawCouponCode,
         ref,
         html,
         renderedHtml,
@@ -253,8 +299,49 @@ export default async function cashfreeRoutes(app, options) {
         return reply.status(400).send({ error: 'Amount, templateId, and format are required fields' });
       }
 
+      // The gateway is INR-only; never trust a client-supplied currency.
+      const currency = 'INR';
+
+      // Coupon codes are stored upper-case; normalise once so usage counting always matches the coupon row.
+      const couponCode =
+        typeof rawCouponCode === 'string' && rawCouponCode.trim() ? rawCouponCode.trim().toUpperCase() : null;
+
+      // A paid order can only come from a real, positive price. Zero, negative or non-numeric amounts used
+      // to fall through to the "free order" branch below, which records the order as already paid.
+      // Free checkouts exist only through a 100% coupon.
+      const requestedAmount = Number(amount);
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0 || requestedAmount > 100000) {
+        return reply.status(400).send({ error: 'Invalid amount' });
+      }
+      if (!['pdf', 'docx', 'jpg', 'png', 'combo'].includes(String(format).toLowerCase())) {
+        return reply.status(400).send({ error: 'Invalid format' });
+      }
+
+      // Compare the client's amount with the price stored for this template. In the default "shadow" mode
+      // a mismatch is only logged, so checkout behaves exactly as before while real traffic shows whether the
+      // check is safe to turn on; PRICE_VALIDATION=enforce then rejects it (see services/pricing.js).
+      const priceMode = priceValidationMode();
+      if (priceMode !== 'off') {
+        const priceCheck = await checkClientPrice(templateId, format, requestedAmount);
+        if (priceCheck.status === 'under' || priceCheck.status === 'over') {
+          app.log.warn(
+            `[Price Check] ${priceCheck.status.toUpperCase()}: template=${templateId} format=${format} ` +
+            `client=${requestedAmount} server=${priceCheck.expected} mode=${priceMode}`
+          );
+          if (priceMode === 'enforce') {
+            return reply.status(409).send({
+              error: 'The price has been updated. Please reload the page and try again.',
+              code: 'PRICE_CHANGED',
+              expectedAmount: priceCheck.expected,
+            });
+          }
+        } else if (priceCheck.status === 'unknown') {
+          app.log.info(`[Price Check] unknown (${priceCheck.reason}): template=${templateId} format=${format} client=${requestedAmount}`);
+        }
+      }
+
       let discountApplied = 0;
-      let finalAmount = parseFloat(amount);
+      let finalAmount = requestedAmount;
 
       // Coupon discount calculation
       if (couponCode) {
@@ -269,7 +356,7 @@ export default async function cashfreeRoutes(app, options) {
 
           if (isNotExpired && hasRemainingUses) {
             if (couponRecord.discountType === 'percentage') {
-              discountApplied = (finalAmount * couponRecord.discountValue) / 100;
+              discountApplied = Math.min(finalAmount, (finalAmount * couponRecord.discountValue) / 100);
             } else {
               discountApplied = Math.min(couponRecord.discountValue, finalAmount);
             }
@@ -286,7 +373,9 @@ export default async function cashfreeRoutes(app, options) {
 
       // Free Order Flow (100% discount coupons)
       if (finalAmount <= 0) {
-        const freeOrderId = `free_promo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        // Order IDs double as the download credential (GET /payment/download-paid-order/:orderId has no
+        // login), so they must be unguessable, not a timestamp plus a 4-digit number.
+        const freeOrderId = `free_promo_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
         await withRetry(() =>
           prisma.order.create({
@@ -345,7 +434,7 @@ export default async function cashfreeRoutes(app, options) {
       }
 
       const config = getCashfreeConfig();
-      const orderId = `cf_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      const orderId = `cf_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
       // Pre-save snapshot if provided directly (non-blocking fire-and-forget)
       const snapshotHtml = html || renderedHtml;
@@ -586,46 +675,23 @@ export default async function cashfreeRoutes(app, options) {
             const payments = await getCashfreeOrderPayments(order.razorpayOrderId);
             const successfulPayment = payments.find((p) => p.payment_status === 'SUCCESS') || payments[0];
 
+            // Take contact details from the gateway only where we have none, and never the "9999999999"
+            // placeholder create-order sends when the visitor gave no phone number.
             const contactUpdate = {};
-            if (cfOrder.customer_details?.customer_email) {
+            if (!order.customerEmail && cfOrder.customer_details?.customer_email) {
               contactUpdate.customerEmail = cfOrder.customer_details.customer_email;
             }
-            if (cfOrder.customer_details?.customer_phone) {
-              contactUpdate.customerPhone = cfOrder.customer_details.customer_phone;
+            const gatewayPhone = cfOrder.customer_details?.customer_phone;
+            if (!order.customerPhone && gatewayPhone && gatewayPhone !== '9999999999') {
+              contactUpdate.customerPhone = gatewayPhone;
             }
 
-            order = await withRetry(() =>
-              prisma.order.update({
-                where: { id: order.id },
-                data: {
-                  status: 'paid',
-                  razorpayPaymentId: successfulPayment?.cf_payment_id ? String(successfulPayment.cf_payment_id) : `cf_pay_${Date.now()}`,
-                  razorpaySignature: successfulPayment?.payment_group || 'cashfree_verified',
-                  ...contactUpdate,
-                },
-              })
-            );
-
-            // Increment coupon usage count
-            if (order.couponCode) {
-              withRetry(() =>
-                prisma.coupon.updateMany({
-                  where: { code: order.couponCode },
-                  data: { usedCount: { increment: 1 } },
-                })
-              ).catch((e) => app.log.warn('[Cashfree Status] Coupon update failed:', e.message));
-            }
-
-            // Affiliate commission
-            if (order.referralCode) {
-              createCommissionForOrder(order, app).catch((e) =>
-                app.log.warn('[Cashfree Status] Commission error:', e.message)
-              );
-            }
-
-            if (redis && redis.status === 'ready') {
-              redis.del('admin:dashboard-stats').catch(() => { });
-            }
+            const paidResult = await markOrderPaid(app, order.razorpayOrderId, {
+              paymentId: successfulPayment?.cf_payment_id ? String(successfulPayment.cf_payment_id) : `cf_pay_${Date.now()}`,
+              signature: successfulPayment?.payment_group || 'cashfree_verified',
+              extra: contactUpdate,
+            });
+            order = paidResult.order || order;
 
             return reply.send({
               success: true,
@@ -794,29 +860,10 @@ export default async function cashfreeRoutes(app, options) {
         }
 
         if (isPaid) {
-          const updatedOrder = await withRetry(() =>
-            prisma.order.update({
-              where: { razorpayOrderId: orderId },
-              data: {
-                status: 'paid',
-                razorpayPaymentId: paymentId || `cf_paid_${Date.now()}`,
-                razorpaySignature: 'cashfree_redirect_verified',
-              },
-            })
-          ).catch((e) => app.log.warn('[Cashfree Callback] Order DB update warn:', e.message));
-
-          if (updatedOrder?.couponCode) {
-            withRetry(() =>
-              prisma.coupon.updateMany({
-                where: { code: updatedOrder.couponCode },
-                data: { usedCount: { increment: 1 } },
-              })
-            ).catch(() => { });
-          }
-
-          if (updatedOrder?.referralCode) {
-            createCommissionForOrder(updatedOrder, app).catch(() => { });
-          }
+          await markOrderPaid(app, orderId, {
+            paymentId: paymentId || `cf_paid_${Date.now()}`,
+            signature: 'cashfree_redirect_verified',
+          }).catch((e) => app.log.warn('[Cashfree Callback] Order DB update warn:', e.message));
 
           return reply.redirect(
             `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=success`,
@@ -846,16 +893,10 @@ export default async function cashfreeRoutes(app, options) {
                 // Payment actually succeeded — override isPaid and redirect to success
                 app.log.info(`[Cashfree Callback] Order ${orderId} has SUCCESS payment despite non-PAID redirect — correcting to paid`);
                 const payId = successPay?.cf_payment_id ? String(successPay.cf_payment_id) : `cf_paid_${Date.now()}`;
-                await withRetry(() =>
-                  prisma.order.update({
-                    where: { razorpayOrderId: orderId },
-                    data: {
-                      status: 'paid',
-                      razorpayPaymentId: payId,
-                      razorpaySignature: 'cashfree_redirect_verified',
-                    },
-                  })
-                ).catch((e) => app.log.warn('[Cashfree Callback] Corrected paid update warn:', e.message));
+                await markOrderPaid(app, orderId, {
+                  paymentId: payId,
+                  signature: 'cashfree_redirect_verified',
+                }).catch((e) => app.log.warn('[Cashfree Callback] Corrected paid update warn:', e.message));
                 return reply.redirect(
                   `${clientUrl}/payment-processing?order_id=${encodeURIComponent(orderId)}&status=success`,
                   303
@@ -947,8 +988,13 @@ export default async function cashfreeRoutes(app, options) {
         return reply.status(400).send({ error: 'Order ID is required' });
       }
 
-      // Simulated sandbox verification
-      if (isSandbox || orderId.startsWith('mock_') || orderId.startsWith('cf_sim_')) {
+      // Simulated verification marks an order paid WITHOUT any payment, so it must be impossible whenever
+      // real gateway credentials are configured. `isSandbox` comes straight from the request body, so
+      // before this guard anyone could POST { orderId, isSandbox: true } and get any order marked paid.
+      if (
+        !getCashfreeConfig().isConfigured &&
+        (isSandbox || orderId.startsWith('mock_') || orderId.startsWith('cf_sim_'))
+      ) {
         const updatedOrder = await withRetry(() =>
           prisma.order.update({
             where: { razorpayOrderId: orderId },
@@ -983,29 +1029,10 @@ export default async function cashfreeRoutes(app, options) {
       const payments = await getCashfreeOrderPayments(orderId);
       const successfulPayment = payments.find((p) => p.payment_status === 'SUCCESS');
 
-      const updatedOrder = await withRetry(() =>
-        prisma.order.update({
-          where: { razorpayOrderId: orderId },
-          data: {
-            status: 'paid',
-            razorpayPaymentId: successfulPayment?.cf_payment_id ? String(successfulPayment.cf_payment_id) : `cf_pay_${Date.now()}`,
-            razorpaySignature: 'cashfree_verified',
-          },
-        })
-      );
-
-      if (updatedOrder.couponCode) {
-        withRetry(() =>
-          prisma.coupon.updateMany({
-            where: { code: updatedOrder.couponCode },
-            data: { usedCount: { increment: 1 } },
-          })
-        ).catch(() => { });
-      }
-
-      if (updatedOrder.referralCode) {
-        await createCommissionForOrder(updatedOrder, app);
-      }
+      const { order: updatedOrder } = await markOrderPaid(app, orderId, {
+        paymentId: successfulPayment?.cf_payment_id ? String(successfulPayment.cf_payment_id) : `cf_pay_${Date.now()}`,
+        signature: 'cashfree_verified',
+      });
 
       return reply.send({
         success: true,
@@ -1019,11 +1046,23 @@ export default async function cashfreeRoutes(app, options) {
   });
 
   // 6. POST /api/cashfree/webhook (Cashfree server-to-server notifications)
-  app.post('/api/cashfree/webhook', async (request, reply) => {
+  app.post('/api/cashfree/webhook', {
+    // Cashfree signs the EXACT bytes it sends. Re-serialising the parsed JSON changes them (for example
+    // "order_amount": 1.00 becomes 1), so the signature never matched for whole-rupee amounts and every
+    // such webhook was rejected. Keep the original text and let Fastify parse a copy of the stream.
+    preParsing: async (request, _reply, payload) => {
+      const chunks = [];
+      for await (const chunk of payload) chunks.push(Buffer.from(chunk));
+      const raw = Buffer.concat(chunks);
+      request.rawWebhookBody = raw.toString('utf8');
+      return Readable.from(raw);
+    },
+  }, async (request, reply) => {
     try {
       const signature = request.headers['x-webhook-signature'];
       const timestamp = request.headers['x-webhook-timestamp'];
-      const rawBody = typeof request.body === 'string' ? request.body : JSON.stringify(request.body);
+      const rawBody = request.rawWebhookBody
+        ?? (typeof request.body === 'string' ? request.body : JSON.stringify(request.body));
 
       // Verify signature if provided
       if (signature && timestamp) {
@@ -1040,16 +1079,10 @@ export default async function cashfreeRoutes(app, options) {
 
       if (orderData?.order_id && (orderData.order_status === 'PAID' || paymentData?.payment_status === 'SUCCESS')) {
         const orderId = orderData.order_id;
-        await withRetry(() =>
-          prisma.order.updateMany({
-            where: { razorpayOrderId: orderId, status: { not: 'paid' } },
-            data: {
-              status: 'paid',
-              razorpayPaymentId: paymentData?.cf_payment_id ? String(paymentData.cf_payment_id) : `cf_hook_${Date.now()}`,
-              razorpaySignature: 'cashfree_webhook_verified',
-            },
-          })
-        );
+        await markOrderPaid(app, orderId, {
+          paymentId: paymentData?.cf_payment_id ? String(paymentData.cf_payment_id) : `cf_hook_${Date.now()}`,
+          signature: 'cashfree_webhook_verified',
+        });
       } else if (
         orderData?.order_id &&
         (paymentData?.payment_status === 'FAILED' ||
@@ -1171,6 +1204,17 @@ export default async function cashfreeRoutes(app, options) {
       if (config.isConfigured && !orderId.startsWith('mock_')) {
         try {
           const payments = await getCashfreeOrderPayments(existing.razorpayOrderId).catch(() => []);
+
+          // Never cancel an order the gateway has actually been paid for. The DB can still say 'pending'
+          // for a few seconds after a UPI app-switch payment (webhook/callback not processed yet), and a
+          // client "user came back" signal must not turn that into 'cancelled'. Leave the status alone;
+          // GET /order-status confirms it with the gateway and does the paid bookkeeping.
+          const cfOrderNow = await getCashfreeOrderStatus(existing.razorpayOrderId).catch(() => null);
+          if (cfOrderNow?.order_status === 'PAID' || payments.some((p) => p.payment_status === 'SUCCESS')) {
+            app.log.info(`[Cashfree Mark Status] Order ${existing.razorpayOrderId} is PAID at gateway; refusing to mark ${requestedStatus || 'failed'}`);
+            return reply.send({ success: false, paid: true, status: 'paid', message: 'Order is paid at gateway' });
+          }
+
           const failedPayment = payments.find((p) => ['FAILED', 'USER_DROPPED', 'CANCELLED'].includes(p.payment_status)) || payments[0];
           if (failedPayment) {
             finalReason =

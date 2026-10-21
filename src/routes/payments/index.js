@@ -9,6 +9,7 @@ import {
 import crypto from 'crypto';
 // Cashfree payment gateway is used exclusively.
 import { getCashfreeOrderStatus, getCashfreeConfig } from '../../services/cashfree.js';
+import { markOrderPaid } from '../cashfree/index.js';
 
 export default async function routes(app, options) {
   // 1. GET /api/cashfree/active-coupons (also aliased from /api/razorpay/ for legacy)
@@ -209,15 +210,11 @@ export default async function routes(app, options) {
           if (cfConfig.isConfigured) {
             const cfOrder = await getCashfreeOrderStatus(order.razorpayOrderId);
             if (cfOrder && cfOrder.order_status === 'PAID') {
-              order = await withRetry(() =>
-                prisma.order.update({
-                  where: { id: order.id },
-                  data: {
-                    status: 'paid',
-                    razorpayPaymentId: `cf_verified_${Date.now()}`,
-                  },
-                })
-              );
+              const paidResult = await markOrderPaid(app, order.razorpayOrderId, {
+                paymentId: `cf_verified_${Date.now()}`,
+                signature: 'cashfree_status_verified',
+              });
+              order = paidResult.order || order;
               return reply.send({
                 success: true,
                 status: 'paid',
@@ -285,13 +282,13 @@ export default async function routes(app, options) {
           if (cfConfig.isConfigured) {
             const cfOrder = await getCashfreeOrderStatus(order.razorpayOrderId);
             if (cfOrder && cfOrder.order_status === 'PAID') {
-              order = await prisma.order.update({
-                where: { id: order.id },
-                data: {
-                  status: 'paid',
-                  razorpayPaymentId: `cf_verified_${Date.now()}`,
-                },
+              // Goes through the shared helper so the coupon use and affiliate commission are counted
+              // once, the same as when the callback / webhook / order-status path confirms the payment.
+              const paidResult = await markOrderPaid(app, order.razorpayOrderId, {
+                paymentId: `cf_verified_${Date.now()}`,
+                signature: 'cashfree_download_verified',
               });
+              order = paidResult.order || order;
             }
           }
         } catch (cfErr) {
