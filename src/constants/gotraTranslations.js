@@ -909,7 +909,7 @@ export const JAIN_GOTRA_TRANSLATIONS = {
     "Hiran": "ہرن",
     "Jain": "جین",
     "Jhabak": "جھبک",
-    "Kala": "کాలా",
+    "Kala": "کالا",
     "Kankariya": "کانکریہ",
     "Karnawat": "کرناوٹ",
     "Kasliwal": "کاسلیوال",
