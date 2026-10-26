@@ -14,6 +14,7 @@ import adminHeroSlidesRoutes from './hero-slides.js';
 import adminUsersRoutes from './users.js';
 import adminAffiliateRoutes from './affiliates.js';
 import adminRestoreDownloadRoutes from './restoreDownload.js';
+import adminAnalyticsRoutes from './analytics.js';
 
 export default async function adminRoutes(fastify, options) {
   // Add preHandler hook for administration authentication (login route will bypass this check internally)
@@ -35,4 +36,5 @@ export default async function adminRoutes(fastify, options) {
   await fastify.register(adminHeroSlidesRoutes);
   await fastify.register(adminUsersRoutes);
   await fastify.register(adminAffiliateRoutes);
+  await fastify.register(adminAnalyticsRoutes);
 }
