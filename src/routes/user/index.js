@@ -83,7 +83,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "Created Marathi biodata for my elder sister within 5 minutes. The Ganesha header and gold border printed with crisp quality on A4 paper. Highly recommended!",
     location: "Pune, Maharashtra",
     template: "Traditional Marathi",
-    createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+    createdAt: "2026-10-14T10:30:00.000Z",
     verified: true,
   },
   {
@@ -93,7 +93,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "The photo cropping tool and privacy features are wonderful. No login was needed and the PDF downloaded immediately without any watermarks.",
     location: "Jaipur, Rajasthan",
     template: "Royal Modern",
-    createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
+    createdAt: "2026-09-27T06:45:00.000Z",
     verified: true,
   },
   {
@@ -103,7 +103,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "Very easy to customize Gotra, Kuldevi, and family sections in Gujarati. My parents were very impressed with the final format.",
     location: "Ahmedabad, Gujarat",
     template: "Classic Gujarati",
-    createdAt: new Date(Date.now() - 8 * 86400000).toISOString(),
+    createdAt: "2026-09-09T13:20:00.000Z",
     verified: true,
   },
   {
@@ -113,7 +113,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "The clean typography and elegant spacing make a huge difference compared to typical Word documents. Sent the PDF via WhatsApp directly to match families.",
     location: "Hyderabad, Telangana",
     template: "Minimalist Gold",
-    createdAt: new Date(Date.now() - 11 * 86400000).toISOString(),
+    createdAt: "2026-08-23T08:10:00.000Z",
     verified: true,
   },
   {
@@ -123,7 +123,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "Saved me hours of design work. Clear options for career, educational qualifications, and horoscopic details. 5 stars experience!",
     location: "Mumbai, Maharashtra",
     template: "Modern Executive",
-    createdAt: new Date(Date.now() - 14 * 86400000).toISOString(),
+    createdAt: "2026-08-08T15:55:00.000Z",
     verified: true,
   },
   {
@@ -133,7 +133,7 @@ const DEFAULT_FALLBACK_TESTIMONIALS = [
     comment: "Best biodata maker online! Downloaded high-resolution print PDF without any watermark or subscription traps. Thank you Biodata99 team.",
     location: "Indore, Madhya Pradesh",
     template: "Vintage Floral",
-    createdAt: new Date(Date.now() - 18 * 86400000).toISOString(),
+    createdAt: "2026-07-29T11:05:00.000Z",
     verified: true,
   }
 ];
