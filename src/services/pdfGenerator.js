@@ -756,9 +756,18 @@ const FONT_MAP = [
   },
 ];
 
+const DEVANAGARI_UNICODE_RANGE = 'U+0900-097F, U+1CD0-1CFF, U+A8E0-A8FF, U+200C-200D, U+25CC';
+const DEVANAGARI_FALLBACK_FILES = [
+  { file: 'NotoSansDevanagari-Regular.ttf', mime: 'font/truetype', weight: '100 500' },
+  { file: 'NotoSansDevanagari-Bold.ttf', mime: 'font/truetype', weight: '600 900' },
+];
+// Families whose font files already cover Devanagari (or are non-Latin scripts handled separately)
+const DEVANAGARI_NATIVE_FAMILIES = new Set(['Noto Sans Devanagari']);
+
 export function generateInlinedFontCss(html = '') {
   let css = '';
   const lower = (html || '').toLowerCase();
+  const hasDevanagari = /[ऀ-ॿ]/.test(html || '');
 
   for (const def of FONT_MAP) {
     const isMatched =
@@ -773,7 +782,20 @@ export function generateInlinedFontCss(html = '') {
         dataUrl = getFontDataUrl(f.fallback, 'font/truetype');
       }
       if (dataUrl) {
-        css += `@font-face { font-family: '${def.family}'; src: url('${dataUrl}') format('${f.mime === 'font/woff2' ? 'woff2' : 'truetype'}'); font-weight: ${f.weight}; font-style: normal; font-display: block; }\n`;
+        css += `@font-face { font-family: '${def.family}'; src: url('${dataUrl}') format('${f.mime === 'font/woff2' ? 'woff2' : 'truetype'}'); font-weight: ${f.weight}; font-style: normal; font-display: block;${f.unicodeRange ? ` unicode-range: ${f.unicodeRange};` : ''} }\n`;
+      }
+    }
+
+    // Latin-only families (Poppins, Noto Serif, ...) have no Devanagari glyphs, so
+    // Chrome falls back per character and splits a word like "अॅग्रिकल्चर" across
+    // fonts, leaving the combining sign (ॅ) without a base (dotted circle). Serve
+    // Devanagari from the real Devanagari font under the same family name instead.
+    if (hasDevanagari && !DEVANAGARI_NATIVE_FAMILIES.has(def.family)) {
+      for (const f of DEVANAGARI_FALLBACK_FILES) {
+        const dataUrl = getFontDataUrl(f.file, f.mime);
+        if (dataUrl) {
+          css += `@font-face { font-family: '${def.family}'; src: url('${dataUrl}') format('truetype'); font-weight: ${f.weight}; font-style: normal; font-display: block; unicode-range: ${DEVANAGARI_UNICODE_RANGE}; }\n`;
+        }
       }
     }
   }
