@@ -10,8 +10,8 @@ import { prisma, withRetry } from '../lib/prisma.js';
  * price matches what the price dialog showed.
  */
 
-const DEFAULT_PRICE = 49;
-const DEFAULT_COMBO_PRICE = 79;
+const DEFAULT_PRICE = 79;
+const DEFAULT_COMBO_PRICE = 99;
 const CACHE_TTL_MS = 60_000;
 
 const cache = new Map(); // templateId -> { at, tpl | null }
